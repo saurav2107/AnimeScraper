@@ -10,9 +10,64 @@ async function download(url:string,origin:string){const u=safeUrl(url);if(u.orig
 async function crawl(s:any,test=false){const config=JSON.parse(s.config);if(!config.termsReviewed)throw Error('Review supplier terms before testing or activating');const base=safeUrl(s.url);const robots=await download(base.origin+'/robots.txt',base.origin);const policy=robotsPolicy(robots);const allowed=policy.allowed;if(!allowed(base.href))throw Error('robots.txt prohibits this source');const urls=new Set<string>([base.href]);const configured=config.productUrls||[];for(const url of configured){const u=new URL(url,base);if(u.origin===base.origin&&allowed(u.href))urls.add(u.href)}
  const products:any[]=[];for(const url of urls){if(urls.size>60||products.length>=2000)break;await new Promise(r=>setTimeout(r,policy.delay*1000));const html=await download(url,base.origin);products.push(...adapter(config.adapter).extract(html,url));if(config.adapter==='woocommerce'){for(const m of html.matchAll(/<a[^>]*class=["'][^"']*next page-numbers[^"']*["'][^>]*href=["']([^"']+)["']/gi)){const u=new URL(m[1],base);if(urls.size<60&&u.origin===base.origin&&allowed(u.href))urls.add(u.href)}}else if(url===base.href){for(const m of html.matchAll(/href=["']([^"']*(?:\/products\/|\/product\/)[^"'#?]*)["']/gi)){const u=new URL(m[1],base);if(urls.size<12&&u.origin===base.origin&&allowed(u.href))urls.add(u.href)}}if(test&&products.length)break}if(!products.length)throw Error('No Product JSON-LD found. Configure product URLs or add an adapter; records were preserved.');return {products:[...new Map(products.filter(p=>{try{return safeUrl(p.url).origin===base.origin}catch{return false}}).map(p=>[p.url,p])).values()],allowed,origin:base.origin}}
 export async function createJob(selected:string[]){const jid=id();const active=(await all('suppliers')).filter(s=>s.status==='Active'&&(!selected.length||selected.includes(s.id)));if(!active.length)throw Error('No selected active suppliers');try{await db().batch([db().prepare("INSERT INTO settings(key,value) VALUES('run_lock',?)").bind(jid),db().prepare('INSERT INTO jobs(id,started,status,logs) VALUES(?,?,?,?)').bind(jid,now(),'Running','[]')])}catch{throw Error('A scraping run is already active. Inspect scraping history before retrying.')}return jid}
-export async function runJob(jid:string,selected:string[]){const suppliers=(await all('suppliers')).filter(s=>s.status==='Active'&&(!selected.length||selected.includes(s.id)));const logs:any[]=[];try{for(let index=0;index<suppliers.length;index++){const s=suppliers[index];try{const {products:found,allowed,origin}=await crawl(s);let added=0,updated=0;const crossSourceListings=(await all('listings')).filter(x=>x.supplier_id!==s.id);for(const p of found){const old=await db().prepare('SELECT * FROM listings WHERE url=?').bind(p.url).first<any>();const at=now();if(old){await execute('INSERT INTO history VALUES(?,?,?,?,?,?)',id(),old.id,at,'SNAPSHOT',old.raw,p.raw);await execute("UPDATE listings SET status='Current' WHERE id=? AND status='NEW'",old.id);if(old.price!==p.price){await execute('INSERT INTO history VALUES(?,?,?,?,?,?)',id(),old.id,at,'PRICE UPDATED',old.raw,p.raw);updated++}if(old.stock!==p.stock)await execute('INSERT INTO history VALUES(?,?,?,?,?,?)',id(),old.id,at,p.stock==='Out of stock'?'OUT OF STOCK':'STOCK UPDATED',old.raw,p.raw);await execute('UPDATE listings SET name=?,image=?,height=?,material=?,price=?,currency=?,stock=?,status=?,raw=?,scraped=? WHERE id=?',p.name,p.image,p.height,p.material,p.price,p.currency,p.stock,old.price!==p.price?'PRICE UPDATED':p.stock==='Out of stock'?'OUT OF STOCK':'Current',p.raw,at,old.id)}else{const gid=id(),lid=id();await execute('INSERT INTO groups VALUES(?,?,?,?)',gid,p.name,'Unmatched',at);await execute('INSERT INTO listings VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',lid,s.id,gid,p.url,p.name,p.image,p.height,p.material,p.price,p.currency,p.stock,'NEW',p.raw,at,at);await execute('INSERT INTO history VALUES(?,?,?,?,?,?)',id(),lid,at,'NEW',null,p.raw);added++;for(const other of crossSourceListings){const score=similarity(p,other);if(score>=.55){let vision=null;try{vision=await visualMatch(p,other,env)}catch(e:any){logs.push({supplier:s.name,status:'Warning',message:e.message})}await execute('INSERT INTO reviews VALUES(?,?,?,?,?,?,?)',id(),lid,other.group_id,vision?.confidence??score,vision?.reason??'Text, variant, height and material comparison. Visual identity requires manual verification.','Pending');break}}}}
- let removed=0;const seen=new Set(found.map(p=>p.url));const missing=(await all('listings')).filter(l=>l.supplier_id===s.id&&!seen.has(l.url)&&l.status!=='REMOVED').slice(0,5);for(const old of missing){if(!allowed(old.url))continue;try{const u=safeUrl(old.url);if(u.origin!==origin)continue;await new Promise(r=>setTimeout(r,1000));const r=await fetch(u.href,{method:'HEAD',redirect:'manual',headers:{'User-Agent':'AnimeCartelBot/1.0'},signal:AbortSignal.timeout(8000)});if(r.status===404||r.status===410){await db().batch([db().prepare("UPDATE listings SET status='REMOVED',scraped=? WHERE id=?").bind(now(),old.id),db().prepare('INSERT INTO history VALUES(?,?,?,?,?,?)').bind(id(),old.id,now(),'REMOVED',old.raw,JSON.stringify({httpStatus:r.status,verifiedUrl:old.url}))]);removed++}}catch{/* Verification failures preserve previous state. */}}
- await execute('UPDATE suppliers SET last_success=? WHERE id=?',now(),s.id);logs.push({supplier:s.name,status:'Success',discovered:found.length,added,updated,removed,at:now()})}catch(e:any){logs.push({supplier:s.name,status:'Failed',message:e.message,at:now()})}await execute('UPDATE jobs SET progress=?,logs=? WHERE id=?',Math.round((index+1)/suppliers.length*100),JSON.stringify(logs),jid)}await execute('UPDATE jobs SET status=?,finished=?,progress=100,logs=? WHERE id=?',logs.some(x=>x.status==='Failed')?'Completed with errors':'Completed',now(),JSON.stringify(logs),jid)}catch(e:any){await execute('UPDATE jobs SET status=?,finished=?,logs=? WHERE id=?','Failed',now(),JSON.stringify([...logs,{message:e.message}]),jid)}finally{await execute("DELETE FROM settings WHERE key='run_lock' AND value=?",jid)}}
+export async function runJob(jid:string,selected:string[]){
+ const sources=(await all('suppliers')).filter(s=>s.status==='Active'&&(!selected.length||selected.includes(s.id)));
+ const logs:any[]=[];
+ try{
+  for(let index=0;index<sources.length;index++){
+   const source=sources[index];
+   try{
+    const {products:found,allowed,origin}=await crawl(source);
+    const existing=await all('listings');
+    const byUrl=new Map(existing.map(l=>[l.url,l]));
+    const candidates=existing.filter(l=>l.supplier_id!==source.id);
+    let added=0,updated=0;
+    const changes:D1PreparedStatement[][]=[];
+    for(const product of found){
+     const at=now(),old=byUrl.get(product.url);
+     const operations:D1PreparedStatement[]=[];
+     const q=(sql:string,...args:any[])=>operations.push(db().prepare(sql).bind(...args));
+     if(old){
+      q('INSERT INTO history VALUES(?,?,?,?,?,?)',id(),old.id,at,'SNAPSHOT',old.raw,product.raw);
+      if(old.price!==product.price){q('INSERT INTO history VALUES(?,?,?,?,?,?)',id(),old.id,at,'PRICE UPDATED',old.raw,product.raw);updated++}
+      if(old.stock!==product.stock)q('INSERT INTO history VALUES(?,?,?,?,?,?)',id(),old.id,at,product.stock==='Out of stock'?'OUT OF STOCK':'STOCK UPDATED',old.raw,product.raw);
+      q('UPDATE listings SET name=?,image=?,height=?,material=?,price=?,currency=?,stock=?,status=?,raw=?,scraped=? WHERE id=?',product.name,product.image,product.height,product.material,product.price,product.currency,product.stock,old.price!==product.price?'PRICE UPDATED':product.stock==='Out of stock'?'OUT OF STOCK':'Current',product.raw,at,old.id);
+     }else{
+      const groupId=id(),listingId=id();
+      q('INSERT INTO groups VALUES(?,?,?,?)',groupId,product.name,'Unmatched',at);
+      q('INSERT INTO listings VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',listingId,source.id,groupId,product.url,product.name,product.image,product.height,product.material,product.price,product.currency,product.stock,'NEW',product.raw,at,at);
+      q('INSERT INTO history VALUES(?,?,?,?,?,?)',id(),listingId,at,'NEW',null,product.raw);
+      added++;
+      const ranked=candidates.map(other=>({other,score:similarity(product,other)})).filter(x=>x.score>=.55).sort((a,b)=>b.score-a.score);
+      if(ranked.length){const {other,score}=ranked[0];let vision=null;try{vision=await visualMatch(product,other,env)}catch(e:any){logs.push({supplier:source.name,status:'Warning',message:e.message})}
+       q('INSERT INTO reviews VALUES(?,?,?,?,?,?,?)',id(),listingId,other.group_id,vision?.confidence??score,vision?.reason??'Text, variant, height and material comparison. Visual identity requires manual verification.','Pending');
+      }
+     }
+     changes.push(operations);
+    }
+    // Each small batch is transactional; a listing, its group and original
+    // history are always committed together. Cache lookups avoid N+1 reads.
+    for(let offset=0;offset<changes.length;offset+=20){
+     await db().batch(changes.slice(offset,offset+20).flat());
+     const processed=Math.min(offset+20,changes.length);
+     await execute('UPDATE jobs SET progress=?,logs=? WHERE id=?',Math.min(99,Math.round((index+processed/Math.max(changes.length,1))/sources.length*100)),JSON.stringify([...logs,{supplier:source.name,status:'Running',discovered:found.length,processed,added,updated}]),jid);
+    }
+    let removed=0;const seen=new Set(found.map(p=>p.url));
+    const missing=existing.filter(l=>l.supplier_id===source.id&&!seen.has(l.url)&&l.status!=='REMOVED').slice(0,5);
+    for(const old of missing){if(!allowed(old.url))continue;try{
+     const u=safeUrl(old.url);if(u.origin!==origin)continue;await new Promise(r=>setTimeout(r,1000));
+     const response=await fetch(u.href,{method:'HEAD',redirect:'manual',headers:{'User-Agent':'AnimeCartelBot/1.0'},signal:AbortSignal.timeout(8000)});
+     if(response.status===404||response.status===410){await db().batch([db().prepare("UPDATE listings SET status='REMOVED',scraped=? WHERE id=?").bind(now(),old.id),db().prepare('INSERT INTO history VALUES(?,?,?,?,?,?)').bind(id(),old.id,now(),'REMOVED',old.raw,JSON.stringify({httpStatus:response.status,verifiedUrl:old.url}))]);removed++}
+    }catch{/* Verification failures preserve prior state. */}}
+    await execute('UPDATE suppliers SET last_success=? WHERE id=?',now(),source.id);
+    logs.push({supplier:source.name,status:'Success',discovered:found.length,added,updated,removed,at:now()});
+   }catch(e:any){logs.push({supplier:source.name,status:'Failed',message:e.message,at:now()})}
+   await execute('UPDATE jobs SET progress=?,logs=? WHERE id=?',Math.round((index+1)/sources.length*100),JSON.stringify(logs),jid);
+  }
+  await execute('UPDATE jobs SET status=?,finished=?,progress=100,logs=? WHERE id=?',logs.some(x=>x.status==='Failed')?'Completed with errors':'Completed',now(),JSON.stringify(logs),jid);
+ }catch(e:any){await execute('UPDATE jobs SET status=?,finished=?,logs=? WHERE id=?','Failed',now(),JSON.stringify([...logs,{message:e.message}]),jid)}
+ finally{await execute("DELETE FROM settings WHERE key='run_lock' AND value=?",jid)}
+}
 export async function api(request:Request,path:string[]){const method=request.method;const body=method==='GET'?{}:await request.json() as any;
  if(method==='GET'&&path[0]==='state'){const entries=await all('settings');return Response.json({capabilities:{vision:!!env.MATCHING_API_URL&&!!env.MATCHING_API_TOKEN},suppliers:await all('suppliers'),groups:await all('groups'),listings:await all('listings'),jobs:await all('jobs'),reviews:await all('reviews'),history:await all('history'),audit:await all('audit'),settings:Object.fromEntries(entries.filter(x=>x.key!=='run_lock').map(x=>[x.key,x.value])),nextRun:nextRun(entries.find(x=>x.key==='time')?.value)})}
  if(path[0]==='suppliers'){if(method==='POST'){safeUrl(body.url);if(!body.name?.trim())throw Error('Supplier name is required');const sid=body.id||id();await execute('INSERT INTO suppliers(id,name,url,category,status,config) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,url=excluded.url,category=excluded.category,status=excluded.status,config=excluded.config',sid,body.name,body.url,body.category||'Indian wholesaler','Paused',JSON.stringify({termsReviewed:!!body.termsReviewed,productUrls:body.productUrls||[],adapter:body.adapter||'jsonld'}));return Response.json({id:sid})}if(method==='DELETE'){await execute("UPDATE suppliers SET status='Archived' WHERE id=?",body.id);return Response.json({ok:true})}}
