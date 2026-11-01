@@ -30,7 +30,7 @@ node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js de
 
 This is an initial implementation, not acceptance-complete production software.
 
-- Supplier URLs were not supplied. No real wholesale source or site's extraction quality has been verified. Product JSON-LD is the only adapter currently supported; selectors, sitemap discovery, official feeds and browser-rendered sites need additional adapters.
+- The first supplied source is APK A Store (apkastore.in). Its public action-figure category has a dedicated WooCommerce adapter. Robots rules were reviewed; public catalog paths are not disallowed. The site footer links Terms & Conditions to a fragment rather than a published terms page. Further sources still need access and extraction validation. Official feeds, sitemaps, generic selector configuration and browser-rendered sources need additional adapters.
 - No vision model provider credentials are configured. Suggestions fall back to explicitly labeled heuristics. An optional multimodal provider adapter uses MATCHING_API_URL, MATCHING_API_TOKEN and MATCHING_MODEL server-side. Its documented request/response contract is in lib/matching.ts. Poses and variants always require review.
 - An idempotent unattended update endpoint and alternate-day IST eligibility checks are implemented. See OPERATIONS.md for cloud-task service access and scheduling. Time changes also require updating the linked task.
 - Background runs use Workers waitUntil (bounded lifetime), not a durable queue. Large supplier catalogs need a queue/workflow, paginated tasks, per-source checkpoints, timeout recovery, source quotas and resumable locks before production-scale use.
@@ -44,7 +44,7 @@ This is an initial implementation, not acceptance-complete production software.
 
 ## Adding a supplier
 
-Switch from demo to live workspace → Suppliers → Add supplier. Supply a permitted public product or category URL; add explicit product URLs if needed. Review terms, save, then Test & activate. The source must return robots.txt and Product JSON-LD. Run scraping now → select source(s), or leave all unchecked for every active supplier. Watch Scraping History.
+Switch from demo to live workspace → Suppliers → Add supplier. Supply a permitted public product or category URL; add explicit product URLs if needed. Review terms, save, then Test & activate. The source must return robots.txt and either Product JSON-LD or supported WooCommerce category cards. Choose the matching adapter. Run scraping now → select source(s), or leave all unchecked for every active supplier. Watch Scraping History.
 
 ## Hosting
 

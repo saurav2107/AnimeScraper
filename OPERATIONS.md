@@ -8,4 +8,4 @@ If the task cannot obtain supported service access, report the missing connectio
 
 The preferred unattended task runs at 09:00 Asia/Kolkata on alternate days. The endpoint also checks date and time preferences, so duplicate calls are safe. If adjusting the configured execution time, update the linked task's cadence to the new time as well. Saving a preference alone cannot reschedule a Sites cloud task.
 
-Manual `POST /api/run` accepts `{selected: [supplier IDs], wait: true}` for a synchronous external runner. The UI default uses a background response and polling; keep manual runs bounded. Large catalogs require a durable queue or per-source checkpointing before production scale. A lock from an interrupted Worker can be recovered after ten minutes through `POST /api/recover`.
+Manual `POST /api/run` accepts `{selected: [supplier IDs], wait: true}` for a synchronous external runner. The UI uses a synchronous run request with progress polling; keep manual runs bounded. Large catalogs require a durable queue or per-source checkpointing before production scale. A lock from an interrupted Worker can be recovered after ten minutes through `POST /api/recover`.
