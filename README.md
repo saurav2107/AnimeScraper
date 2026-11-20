@@ -1,4 +1,4 @@
-# AnimeCartel Supplier Intelligence
+# AnimeScraper — AnimeCartel Supplier Intelligence
 
 A private supplier intelligence application built with React 19 / Vinext, TypeScript, Cloudflare Workers and D1. The existing project folder is the source of truth.
 
@@ -53,3 +53,13 @@ Sites creates the owner-private deployment and D1 binding from `.openai/hosting.
 ## Provider endpoint contract
 
 Set MATCHING_API_URL, MATCHING_API_TOKEN and optional MATCHING_MODEL as Sites runtime secrets. The HTTPS endpoint receives `{model, task, instructions, listings:[{name,image_url,height_cm,material,description}, ...]}` and must return `{same_variant:boolean, confidence:number, reason:string}`. Only explicit equivalent variants above 0.6 produce visual suggestions. All suggestions require manual approval. API errors fall back to text suggestions with a warning in the run log. Secrets are never sent to the browser.
+
+## Full catalog imports
+
+Choose **WooCommerce public product API (full catalog)** for compatible stores. The importer follows every API page using `per_page=100` and stable ID ordering, obeys robots rules and supplier request delays, converts minor currency units, and checks the retrieved count against `X-WP-Total`. Password-protected records are excluded and counted. Partial coverage is reported as Partial / Completed with errors; it never masquerades as a complete import and never triggers missing-product removal checks.
+
+The JSON-LD adapter now traverses product sitemaps advertised by robots.txt and follows all discovered product URLs. It no longer samples eleven products. WooCommerce category pagination is followed until exhausted. Operational safety limits are explicit incomplete-run errors.
+
+The catalog renders 48 products per page by default. Search, filters and exports still apply to the entire imported catalog. Scraping History shows discovery totals, expected totals, page counts, persistence progress and extraction errors.
+
+Regression checks: `node --experimental-strip-types --test tests/intelligence.test.mjs tests/crawler.test.mjs`; after building, `node tests/scraper.integration.mjs` runs the production Worker against isolated D1 and mocked supplier responses.

@@ -1,11 +1,28 @@
+// Schema.org permits prices directly on Offer or within UnitPriceSpecification.
+// Do not interpret an AggregateOffer range or a strikethrough/list price as an
+// exact current supplier price.
+export function offerPrice(offers:any):{price:number|null;currency:string|null}{
+ const list=Array.isArray(offers)?offers:[offers];
+ for(const offer of list){
+  if(!offer||typeof offer!=='object')continue;
+  const specs=Array.isArray(offer.priceSpecification)?offer.priceSpecification:[offer.priceSpecification];
+  for(const value of [offer,...specs]){
+   if(!value||/StrikethroughPrice|ListPrice/i.test(String(value.priceType||'')))continue;
+   if(value.price==null||String(value.price).trim()==='')continue;
+   const price=Number(String(value.price).replace(/,/g,''));
+   if(Number.isFinite(price)&&price>=0)return {price,currency:value.priceCurrency||offer.priceCurrency||null};
+  }
+ }
+ return {price:null,currency:null};
+}
 export function normalizeProduct(p:any,url:string){
  const offer=Array.isArray(p.offers)?p.offers[0]:p.offers||{};
- const n=Number(String(offer.price??'').replace(/,/g,''));
+ const {price,currency}=offerPrice(p.offers);
  const description=String(p.description||'').replace(/<[^>]*>/g,' ');
  const heightText=description+' '+String(p.name||'');const hm=heightText.match(/(?:height|tall)\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*(cm|mm|inch(?:es)?)/i)||heightText.match(/(\d+(?:\.\d+)?)\s*(cm|mm|inch(?:es)?)\s*(?:in height|tall|high)/i);
  const height=hm?Number(hm[1])*(hm[2].toLowerCase()==='mm'?.1:hm[2].toLowerCase().startsWith('inch')?2.54:1):null;
  const firstImage=Array.isArray(p.image)?p.image[0]:p.image;const image=typeof firstImage==='object'?firstImage?.url:firstImage;
- return {name:String(p.name||'').trim(),url,image:image&&/^https?:$/.test(new URL(image,url).protocol)?new URL(image,url).href:null,height:height&&height<500?height:null,material:p.material||description.match(/\b(PVC|ABS|resin)\b/i)?.[1]?.toUpperCase()||null,price:offer.price!=null&&String(offer.price).trim()!==''&&Number.isFinite(n)&&n>=0?n:null,currency:offer.priceCurrency||null,stock:/OutOfStock|SoldOut/.test(offer.availability)?'Out of stock':/InStock/.test(offer.availability)?'In stock':'Unknown',raw:JSON.stringify(p)};
+ return {name:String(p.name||'').trim(),url,image:image&&/^https?:$/.test(new URL(image,url).protocol)?new URL(image,url).href:null,height:height&&height<500?height:null,material:p.material||description.match(/\b(PVC|ABS|resin)\b/i)?.[1]?.toUpperCase()||null,price,currency,stock:/OutOfStock|SoldOut/.test(offer.availability)?'Out of stock':/InStock/.test(offer.availability)?'In stock':'Unknown',raw:JSON.stringify(p)};
 }
 export function extractProducts(html:string,url:string){const products:any[]=[];function walk(x:any){if(!x||typeof x!=='object')return;if(Array.isArray(x)){x.forEach(walk);return}if([].concat(x['@type']||[]).some((v:any)=>v==='Product'))products.push(normalizeProduct(x,x.url?new URL(x.url,url).href:url));if(x['@graph'])walk(x['@graph']);if(x.itemListElement)walk(x.itemListElement);if(x.item)walk(x.item)}for(const m of html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)){try{walk(JSON.parse(m[1]))}catch{}}return products.filter(p=>p.name)}
 export function similarity(a:any,b:any){if(a.height&&b.height&&Math.abs(a.height-b.height)>1)return 0;if(a.material&&b.material&&a.material!==b.material)return 0;const variants=/\b(ssj\d*|super saiyan|gear \d|base|resin|deluxe|limited|sitting|standing)\b/gi;const va=(a.name.match(variants)||[]).sort().join(),vb=(b.name.match(variants)||[]).sort().join();if(va!==vb)return 0;const x=new Set<string>(a.name.toLowerCase().match(/[a-z0-9]+/g)||[]),y=new Set<string>(b.name.toLowerCase().match(/[a-z0-9]+/g)||[]);return [...x].filter(v=>y.has(v)).length/new Set([...x,...y]).size}
@@ -17,3 +34,23 @@ export function robotsPolicy(text:string,agent='animecartelbot'){
 }
 export function decodeHtml(s:string){return s.replace(/&#(x[0-9a-f]+|\d+);/gi,(_,v)=>{const n=v[0].toLowerCase()==='x'?parseInt(v.slice(1),16):Number(v);return n>0&&n<=0x10ffff?String.fromCodePoint(n):''}).replace(/&(amp|quot|apos|lt|gt|nbsp);/g,(_,v)=>(({amp:'&',quot:'"',apos:"'",lt:'<',gt:'>',nbsp:' '} as Record<string,string>)[v]!))}
 export function extractWooCommerce(html:string,url:string){const chunks=('\n'+html).split(/(?=<(?:div|li)\s+class=["'][^"']*\bproduct\s+type-product\b)/i);const products:any[]=[];for(const c of chunks.slice(1)){const title=c.match(/<h[23][^>]*class=["'][^"']*product-title[^"']*["'][^>]*>\s*<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);if(!title)continue;const image=c.match(/<img[^>]*data-src=["']([^"']+)["']/i)?.[1]||c.match(/<img[^>]*src=["'](https?:[^"']+)["']/i)?.[1];const priceSection=c.match(/<div class=["']product-price["']>([\s\S]*?)<\/div>/i)?.[1]||'';const priceSource=priceSection.match(/<ins[^>]*>([\s\S]*?)<\/ins>/i)?.[1]||priceSection;const amount=priceSource.match(/<bdi[^>]*>\s*<span[^>]*>[\s\S]*?<\/span>\s*([\d,.]+)/i)?.[1];const currency=/&#8377;|₹/.test(priceSource)?'INR':null;const description=decodeHtml(c.match(/<div class=["']short-description["']>([\s\S]*?)<\/div>/i)?.[1]?.replace(/<[^>]+>/g,' ')||'');const name=decodeHtml(title[2].replace(/<[^>]+>/g,''));const p=normalizeProduct({name,image:image?decodeHtml(image):null,description,offers:{price:amount,priceCurrency:currency,availability:/\boutofstock\b/.test(c.slice(0,c.indexOf('>')))?'https://schema.org/OutOfStock':/\binstock\b/.test(c.slice(0,c.indexOf('>')))?'https://schema.org/InStock':null},source_category_page:url,original_card_html:c.slice(0,20000)},new URL(decodeHtml(title[1]),url).href);products.push(p)}return products}
+export function wooStorePrice(product:any):{price:number|null;currency:string|null}{
+ const values=product?.prices;
+ if(!values||!Number.isInteger(values.currency_minor_unit)||values.currency_minor_unit<0||values.currency_minor_unit>6)return {price:null,currency:values?.currency_code||null};
+ const range=values.price_range;
+ if(range&&range.min_amount!==range.max_amount)return {price:null,currency:values.currency_code||null};
+ if(typeof values.price!=='string'||!/^\d+$/.test(values.price))return {price:null,currency:values.currency_code||null};
+ const price=Number(values.price)/10**values.currency_minor_unit;
+ return {price:Number.isFinite(price)?price:null,currency:values.currency_code||null};
+}
+export function productPrice(product:any){return product?.prices?wooStorePrice(product):offerPrice(product?.offers)}
+export function normalizeWooStoreProduct(product:any){
+ const price=wooStorePrice(product);
+ const p=normalizeProduct({name:decodeHtml(String(product.name||'')),description:product.description||product.short_description,image:product.images?.map((i:any)=>i.src)||[],offers:{price:price.price,priceCurrency:price.currency,availability:product.is_in_stock===true?'https://schema.org/InStock':product.is_in_stock===false?'https://schema.org/OutOfStock':null}},product.permalink);
+ const units=String(product.formatted_dimensions||'').replace(/<[^>]*>/g,' ').match(/\b(cm|mm|inches|inch|in|m)\b/i)?.[1]?.toLowerCase();
+ const h=Number(product.dimensions?.height);
+ if(units&&product.dimensions?.height!==''&&Number.isFinite(h)&&h>0){const cm=h*(units==='mm'?.1:units==='m'?100:units.startsWith('in')?2.54:1);if(cm<500)p.height=cm}
+ const material=product.attributes?.find((a:any)=>/^material$/i.test(a.name));
+ if(material?.terms?.length)p.material=material.terms.map((t:any)=>t.name).join(', ');
+ return {...p,raw:JSON.stringify(product)};
+}
