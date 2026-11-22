@@ -3,6 +3,7 @@ import clsx from "clsx";
 import { ChevronLeft, ChevronRight, Loader2, Maximize2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { imgSrc } from "@/lib/client";
 
 /** Close a popover on outside click or Escape. */
 export function useDismiss(open: boolean, onClose: () => void) {
@@ -165,7 +166,7 @@ export function Lightbox({ images, index, title, onClose }: { images: string[]; 
           <div className="flex h-64 w-80 items-center justify-center rounded bg-white/10 text-sm text-white">Image unavailable</div>
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={images[i]} alt={title ?? ""} onError={() => setFailed(true)} className="max-h-[82vh] max-w-[92vw] rounded bg-white object-contain shadow-2xl" />
+          <img src={imgSrc(images[i])} alt={title ?? ""} onError={() => setFailed(true)} className="max-h-[82vh] max-w-[92vw] rounded bg-white object-contain shadow-2xl" />
         )}
         <figcaption className="max-w-[90vw] text-center text-sm text-white">{title}{n > 1 && <span className="ml-2 text-white/70">{i + 1} / {n}</span>}</figcaption>
       </figure>
@@ -177,10 +178,14 @@ export function Lightbox({ images, index, title, onClose }: { images: string[]; 
 /** Thumbnail. With `zoom`, clicking it opens a full-size preview (zoom = list of images to browse, or true for just this one). */
 export function Thumb({ src, size = 48, alt = "", zoom }: { src?: string | null; size?: number; alt?: string; zoom?: string[] | true }) {
   const [open, setOpen] = useState(false);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [src]);
   const style = { width: size, height: size };
   if (!src) return <div style={style} className="flex shrink-0 items-center justify-center rounded bg-gray-100 text-[10px] text-gray-400">No img</div>;
+  // A broken image shows a visible placeholder instead of an empty gap.
+  if (failed) return <div style={style} title="Image unavailable" className="flex shrink-0 items-center justify-center rounded bg-gray-100 text-center text-[9px] leading-tight text-gray-400">Image unavailable</div>;
   // eslint-disable-next-line @next/next/no-img-element
-  const img = <img src={src} alt={alt} style={style} className="shrink-0 rounded bg-gray-100 object-cover" loading="lazy" onError={(e) => ((e.currentTarget.style.visibility = "hidden"), undefined)} />;
+  const img = <img src={imgSrc(src)} alt={alt} style={style} className="shrink-0 rounded bg-gray-100 object-cover" loading="lazy" onError={() => setFailed(true)} />;
   if (!zoom) return img;
   const list = zoom === true || !zoom.length ? [src] : zoom;
   return (

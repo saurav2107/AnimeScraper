@@ -34,3 +34,6 @@ export const fmtPrice = (p: number | null | undefined, cur?: string | null) => {
   return !cur || cur === "INR" ? `₹${n}` : `${cur} ${n}`;
 };
 export const fmtDate = (iso?: string | null) => (iso ? new Date(iso).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }) : "—");
+
+/** Route a supplier image through the server's cache/proxy (avoids CDN rate limits and hotlink blocks). */
+export const imgSrc = (url: string) => (url.startsWith("/") || url.startsWith("data:") ? url : `/api/img?u=${encodeURIComponent(url)}`);

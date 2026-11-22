@@ -2,12 +2,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { demoDb, liveDb } from "@/db";
 import { api } from "@/lib/api";
 import { HttpError } from "@/lib/errors";
+import { getImage, ImageError } from "@/lib/imgproxy";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 async function handle(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   const { path } = await ctx.params;
+  // Image proxy: supplier CDNs rate-limit when the grid asks for many thumbnails at once, so images are fetched/cached here.
+  if (req.method === "GET" && path.join("/") === "img") {
+    try {
+      const { buf, type } = await getImage(req.nextUrl.searchParams.get("u") ?? "");
+      return new Response(new Uint8Array(buf), { headers: { "content-type": type, "cache-control": "public, max-age=2592000, immutable", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox" } });
+    } catch (e) {
+      const status = e instanceof ImageError ? e.status : 502;
+      return new Response((e as Error).message, { status, headers: { "cache-control": "no-store" } });
+    }
+  }
   // Same-origin check on mutating requests (NFR-SEC-01). Scheduler calls carry no Origin header.
   if (req.method !== "GET") {
     const origin = req.headers.get("origin");

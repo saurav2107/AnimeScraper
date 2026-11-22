@@ -50,3 +50,6 @@ yarn-error.log*
 *.sqlite-*
 *.db
 *.db-*
+
+# Runtime image cache
+/data/img-cache/
