@@ -1,5 +1,5 @@
 import type { DB } from "@/db";
-import { crawlSupplier, type CrawlResult, type ScrapedProduct } from "./adapters";
+import { crawlSupplier, excludeTerms, isExcluded, type CrawlResult, type ScrapedProduct } from "./adapters";
 import { Crawler, type CrawlOptions } from "./crawler";
 import type { SizeKind } from "./categories";
 import { badRequest, conflict, notFound } from "./errors";
@@ -43,13 +43,13 @@ export function persistProducts(db: DB, supplier: { id: string; name: string; ca
   const getByUrl = db.prepare("SELECT l.id, l.supplier_id, l.group_id, l.url, l.price, l.stock, l.status, s.name AS owner FROM listings l JOIN suppliers s ON s.id = l.supplier_id WHERE l.url = ?");
   const insGroup = db.prepare("INSERT INTO groups (id, category_id, name, status, created) VALUES (?,?,?,?,?)");
   const insListing = db.prepare(
-    `INSERT INTO listings (id, supplier_id, group_id, url, name, image, height, material, size_value, price, currency, stock, status, raw, scraped, created)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO listings (id, supplier_id, group_id, url, name, image, height, material, size_value, category, price, currency, stock, status, raw, scraped, created)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   );
   const insHist = db.prepare("INSERT INTO history (id, listing_id, kind, previous, current, at) VALUES (?,?,?,?,?,?)");
   const insPrice = db.prepare("INSERT INTO price_history (id, listing_id, price, currency, stock, recorded_at) VALUES (?,?,?,?,?,?)");
   const upd = db.prepare(
-    `UPDATE listings SET name=?, image=?, height=?, material=?, size_value=?, price=?, currency=?, stock=?, status=?, raw=?, scraped=?,
+    `UPDATE listings SET name=?, image=?, height=?, material=?, size_value=?, category=COALESCE(?, category), price=?, currency=?, stock=?, status=?, raw=?, scraped=?,
        previous_price = COALESCE(?, previous_price), price_changed_at = COALESCE(?, price_changed_at) WHERE id=?`,
   );
 
@@ -66,7 +66,7 @@ export function persistProducts(db: DB, supplier: { id: string; name: string; ca
           const gid = uid();
           const lid = uid();
           insGroup.run(gid, supplier.categoryId, p.name, "Active", runAt);
-          insListing.run(lid, supplier.id, gid, p.url, p.name, p.image, height, p.material, p.sizeValue, p.price, p.currency, p.stock, "NEW", raw, runAt, runAt);
+          insListing.run(lid, supplier.id, gid, p.url, p.name, p.image, height, p.material, p.sizeValue, p.category ?? null, p.price, p.currency, p.stock, "NEW", raw, runAt, runAt);
           insHist.run(uid(), lid, "NEW", null, JSON.stringify({ price: p.price, stock: p.stock }), runAt);
           insPrice.run(uid(), lid, p.price, p.currency, p.stock, runAt);
           entry.added++;
@@ -91,7 +91,7 @@ export function persistProducts(db: DB, supplier: { id: string; name: string; ca
           insHist.run(uid(), ex.id, p.stock === "Out of stock" ? "OUT OF STOCK" : "STOCK UPDATED", JSON.stringify({ stock: ex.stock }), JSON.stringify({ stock: p.stock }), runAt);
           if (status === "Current" && p.stock === "Out of stock") status = "OUT OF STOCK";
         }
-        upd.run(p.name, p.image, height, p.material, p.sizeValue, p.price, p.currency, p.stock, status, raw, runAt, prev, changedAt, ex.id);
+        upd.run(p.name, p.image, height, p.material, p.sizeValue, p.category ?? null, p.price, p.currency, p.stock, status, raw, runAt, prev, changedAt, ex.id);
         insPrice.run(uid(), ex.id, p.price, p.currency, p.stock, runAt);
         entry.updated++;
       }
@@ -115,6 +115,30 @@ export async function verifyRemovals(db: DB, supplierId: string, seen: Set<strin
       entry.removed++;
     }
   }
+}
+
+/**
+ * After a complete crawl, remove this supplier's earlier listings that now fall under its skip list
+ * (e.g. keychains imported before the rule was added). Listings that are part of a merge are kept.
+ */
+export function purgeExcluded(db: DB, supplierId: string, terms: string[], excludedUrls: string[] = []): number {
+  if (!terms.length) return 0;
+  const urls = new Set(excludedUrls);
+  const rows = db.prepare(
+    "SELECT l.id, l.group_id, l.name, l.category, l.url FROM listings l WHERE l.supplier_id = ? AND NOT EXISTS (SELECT 1 FROM merge_event_listings m WHERE m.listing_id = l.id)",
+  ).all(supplierId) as Array<{ id: string; group_id: string; name: string; category: string | null; url: string }>;
+  const doomed = rows.filter((r) => urls.has(r.url) || isExcluded(terms, r.category, r.name));
+  if (!doomed.length) return 0;
+  db.transaction(() => {
+    for (const r of doomed) {
+      db.prepare("DELETE FROM price_history WHERE listing_id = ?").run(r.id);
+      db.prepare("DELETE FROM history WHERE listing_id = ?").run(r.id);
+      db.prepare("DELETE FROM listings WHERE id = ?").run(r.id);
+      db.prepare("DELETE FROM groups WHERE id = ? AND NOT EXISTS (SELECT 1 FROM listings WHERE group_id = groups.id)").run(r.group_id);
+    }
+    audit(db, "Purge excluded listings", { supplierId, count: doomed.length, terms });
+  })();
+  return doomed.length;
 }
 
 export function pruneHistory(db: DB, days = RETENTION_DAYS) {
@@ -182,6 +206,8 @@ export async function executeJob(db: DB, jobId: string, deps: RunDeps = {}) {
         entry.errors = res.errors.slice(0, 10);
         const seen = persistProducts(db, { id: s.id, name: s.name, categoryId: s.categoryId }, res.products, entry);
         if (res.complete) {
+          const purged = purgeExcluded(db, sid, excludeTerms(s.config), res.excludedUrls);
+          if (purged) entry.errors.push(`Note: removed ${purged} earlier listing(s) that match the skip list.`);
           await verifyRemovals(db, sid, seen, crawler, entry);
           db.prepare("UPDATE suppliers SET last_success = ? WHERE id = ?").run(now(), sid);
         } else {

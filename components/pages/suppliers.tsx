@@ -5,7 +5,7 @@ import clsx from "clsx";
 import { Alert, Badge, Button, Card, Empty, FieldError, Modal, PageHeader, Switch } from "@/components/ui";
 import { ApiError, del, fmtDate, isDemo, post } from "@/lib/client";
 
-const blank = (categoryId: string) => ({ name: "", url: "", categoryId, adapter: "woocommerce-api", productUrls: "", sitemapUrls: "", textFilter: "", termsAcknowledged: false });
+const blank = (categoryId: string) => ({ name: "", url: "", categoryId, adapter: "woocommerce-api", productUrls: "", sitemapUrls: "", textFilter: "", excludeText: "", termsAcknowledged: false });
 
 export function SuppliersPage({ state, onChanged, onRun, goCategories }: { state: any; onChanged: () => void; onRun: () => void; goCategories: () => void }) {
   const [showDeleted, setShowDeleted] = useState(false);
@@ -22,7 +22,7 @@ export function SuppliersPage({ state, onChanged, onRun, goCategories }: { state
   function openForm(s?: any) {
     if (!cats.length) return toast.error("Create a category before registering suppliers.");
     setErr(null);
-    setForm(s ? { id: s.id, name: s.name, url: s.url, categoryId: s.categoryId, adapter: s.config.adapter, productUrls: s.config.productUrls.join("\n"), textFilter: s.config.textFilter ?? "", sitemapUrls: s.config.sitemapUrls.join("\n"), termsAcknowledged: s.config.termsAcknowledged, locked: locked(s) } : blank(cats.length === 1 ? cats[0].id : ""));
+    setForm(s ? { id: s.id, name: s.name, url: s.url, categoryId: s.categoryId, adapter: s.config.adapter, productUrls: s.config.productUrls.join("\n"), textFilter: s.config.textFilter ?? "", excludeText: s.config.excludeText ?? "", sitemapUrls: s.config.sitemapUrls.join("\n"), termsAcknowledged: s.config.termsAcknowledged, locked: locked(s) } : blank(cats.length === 1 ? cats[0].id : ""));
   }
   const change = (patch: Record<string, unknown>) => { setForm((f: any) => ({ ...f, ...patch })); setErr(null); };
   const fe = (f: string) => (err?.field === f ? err.message : undefined);
@@ -31,7 +31,7 @@ export function SuppliersPage({ state, onChanged, onRun, goCategories }: { state
     setBusy("save"); setErr(null);
     const lines = (v: string) => v.split("\n").map((x) => x.trim()).filter(Boolean);
     try {
-      const r = await post("suppliers", { id: form.id, name: form.name, url: form.url.trim(), categoryId: form.categoryId, adapter: form.adapter, productUrls: lines(form.productUrls), sitemapUrls: lines(form.sitemapUrls), termsAcknowledged: form.termsAcknowledged, textFilter: form.textFilter });
+      const r = await post("suppliers", { id: form.id, name: form.name, url: form.url.trim(), categoryId: form.categoryId, adapter: form.adapter, productUrls: lines(form.productUrls), sitemapUrls: lines(form.sitemapUrls), termsAcknowledged: form.termsAcknowledged, textFilter: form.textFilter, excludeText: form.excludeText });
       toast.success(r.status === "Active" ? "Supplier saved." : "Supplier saved as Paused. Test & activate it to start scraping.");
       setForm(null); onChanged();
     } catch (e) { setErr({ message: (e as Error).message, field: (e as ApiError).data?.field }); } finally { setBusy(null); }
@@ -116,6 +116,12 @@ export function SuppliersPage({ state, onChanged, onRun, goCategories }: { state
                 </select>
                 <p className="mt-1 text-xs text-gray-500">{{ rendered: "For sites that load products with JavaScript (price visible without login). Opens the page in Chrome like a visitor and presses “Load more”. Needs Chrome installed on the server.", shopify: "For Shopify stores (URLs like /collections/…). Uses the public /products.json feed; paste the collection or store URL.", "jsonld-list": "For custom sites whose listing pages carry a schema.org product list with prices. Follows ?page=N automatically.", "woocommerce-api": "Fastest. For WooCommerce shops with /wp-json/wc/store enabled.", woocommerce: "Reads product cards on category pages.", jsonld: "Reads schema.org Product data from product pages or a sitemap." }[form.adapter as string]}</p>
               </div>
+            </div>
+            <div>
+              <label className="label" htmlFor="sx">Skip products whose category contains (optional)</label>
+              <input id="sx" className={clsx("input", bad("excludeText"))} aria-invalid={!!fe("excludeText")} placeholder="e.g. keychain, keyring" maxLength={200} value={form.excludeText} onChange={(e) => change({ excludeText: e.target.value })} />
+              <FieldError>{fe("excludeText")}</FieldError>
+              <p className="mt-1 text-xs text-gray-500">Comma-separated. Matches the supplier&apos;s own category label; if the site shows none, it matches the product name. Existing matching items are removed on the next run.</p>
             </div>
             {form.adapter === "rendered" && (
               <div><label className="label" htmlFor="stf">Only keep products whose card contains (optional)</label><input id="stf" className="input" placeholder="e.g. Action Figures" maxLength={80} value={form.textFilter} onChange={(e) => change({ textFilter: e.target.value })} /><p className="mt-1 text-xs text-gray-500">Useful when the listing mixes categories, such as statues and katanas alongside action figures.</p></div>

@@ -152,3 +152,28 @@ describe("woocommerce HTML adapter reads only the main listing", () => {
     expect(r.errors.join(" ")).toContain("WooCommerce pages");
   });
 });
+
+describe("skip list (exclude by category)", () => {
+  const card = (slug: string, label: string, name: string, price: string) => `<div><a href="/products/${slug}"><img alt="${name}"></a><div class="mb-1"><div><span>${label}</span></div><a href="/products/${slug}"><h3>${name}</h3></a></div><span>₹${price}</span></div>`;
+  const ld = (items: Array<[string, string, string]>) => `<script type="application/ld+json">${JSON.stringify({ "@type": "ItemList", itemListElement: items.map(([slug, name, price], i) => ({ position: i + 1, url: `https://inkai.example/products/${slug}`, name, offers: { price, priceCurrency: "INR" } })) })}</script>`;
+  const html = ld([["goku", "Goku Figure", "1000"], ["panda", "cute 3D panda keychains", "85"], ["set", "Naruto Set with Keychain", "500"]]) +
+    card("goku", "Figures", "Goku Figure", "1000") + card("panda", "Keychains", "cute 3D panda keychains", "85") + card("set", "Figures set", "Naruto Set with Keychain", "500");
+
+  it("jsonld-list captures each card's category label", async () => {
+    const c = mk("https://inkai.example", { "/products": html, "/products?page=2": "<html></html>" });
+    const r = await crawlSupplier(c, "https://inkai.example/products", cfg("jsonld-list"), "height");
+    expect(r.products.map((p) => [p.name, p.category])).toEqual([["Goku Figure", "Figures"], ["cute 3D panda keychains", "Keychains"], ["Naruto Set with Keychain", "Figures set"]]);
+  });
+  it("skips by category label, so a figure set whose NAME mentions a keychain stays", async () => {
+    const c = mk("https://inkai.example", { "/products": html, "/products?page=2": "<html></html>" });
+    const r = await crawlSupplier(c, "https://inkai.example/products", { ...cfg("jsonld-list"), excludeText: "keychain, keyring" }, "height");
+    expect(r.products.map((p) => p.name)).toEqual(["Goku Figure", "Naruto Set with Keychain"]);
+    expect(r.errors.join(" ")).toContain("skipped 1 product(s)");
+  });
+  it("falls back to the name when the site shows no category", async () => {
+    const { isExcluded } = await import("@/lib/adapters");
+    expect(isExcluded(["keyring"], null, "Goku Keyring")).toBe(true);
+    expect(isExcluded(["keyring"], "Figures", "Goku Keyring")).toBe(false);
+    expect(isExcluded([], "Keychains", "x")).toBe(false);
+  });
+});

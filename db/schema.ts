@@ -51,6 +51,7 @@ export const listings = sqliteTable(
     height: text("height"),
     material: text("material"),
     sizeValue: text("size_value"),
+    category: text("category"), // the supplier's own category label for this product, when the site shows one
     price: real("price"),
     previousPrice: real("previous_price"),
     priceChangedAt: text("price_changed_at"),

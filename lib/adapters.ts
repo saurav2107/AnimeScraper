@@ -16,6 +16,8 @@ export interface ScrapedProduct {
   stock: "In stock" | "Out of stock" | "Unknown";
   material: string | null;
   sizeValue: string | null;
+  /** The supplier's own category label(s) for this product, if the site exposes them. */
+  category?: string | null;
   raw: unknown;
 }
 
@@ -23,6 +25,8 @@ export interface CrawlResult {
   products: ScrapedProduct[];
   complete: boolean; // false => partial crawl: no removal checks
   errors: string[];
+  /** URLs the skip list filtered out of this crawl (so earlier imports of them can be cleaned up). */
+  excludedUrls?: string[];
 }
 
 const MAX_PRODUCTS = 1500;
@@ -43,7 +47,7 @@ const text = (s: string | undefined | null) => (s ?? "").replace(/<[^>]+>/g, " "
 
 export function normalize(
   kind: SizeKind,
-  p: { url: string; name: string; image?: string | null; images?: string[]; price?: unknown; currency?: string | null; stock?: unknown; material?: string | null; description?: string; attributes?: string; raw?: unknown },
+  p: { category?: string | null; url: string; name: string; image?: string | null; images?: string[]; price?: unknown; currency?: string | null; stock?: unknown; material?: string | null; description?: string; attributes?: string; raw?: unknown },
 ): ScrapedProduct | null {
   const url = httpUrl(p.url);
   const name = text(p.name);
@@ -59,6 +63,7 @@ export function normalize(
     stock: stockOf(p.stock),
     material: p.material ?? null,
     sizeValue: extractSize(kind, [name, text(p.description), text(p.attributes)]),
+    category: p.category?.trim() || null,
     raw: p.raw ?? null,
   };
 }
@@ -101,6 +106,7 @@ export function parseJsonLdProduct(html: string, pageUrl: string, kind: SizeKind
     currency: (offer.priceCurrency as string) ?? (spec.priceCurrency as string) ?? "INR",
     stock: offer.availability,
     material: (p.material as string) ?? null,
+    category: typeof p.category === "string" ? p.category : null,
     description: String(p.description ?? ""),
     raw: p,
   });
@@ -176,6 +182,7 @@ export function wooCards($: cheerio.CheerioAPI, pageUrl: string, kind: SizeKind)
       price: priceEl.text(),
       currency: "INR",
       stock: classes.includes("outofstock") ? "outofstock" : classes.includes("instock") || classes.includes("onbackorder") ? "instock" : "",
+      category: classes.filter((c) => c.startsWith("product_cat-")).map((c) => c.slice(12).replace(/-/g, " ")).join(", "),
       raw: { categories: classes.filter((c) => c.startsWith("product_cat-")).map((c) => c.slice(12)), classes: classes.slice(0, 30) },
     });
     if (n) out.set(url, n);
@@ -276,6 +283,7 @@ async function woocommerceApi(c: Crawler, startUrl: string, kind: SizeKind): Pro
         const n = normalize(kind, {
           url: it.permalink,
           name: it.name,
+          category: (it.categories ?? []).map((k: any) => k.name).filter(Boolean).join(", "),
           image: it.images?.[0]?.src,
           images: (it.images ?? []).map((i: any) => i.src),
           price,
@@ -324,6 +332,7 @@ async function shopify(c: Crawler, startUrl: string, kind: SizeKind): Promise<Cr
         const n = normalize(kind, {
           url: `${u.origin}/products/${it.handle}`,
           name: it.title,
+          category: [it.product_type, ...(it.tags ?? [])].filter(Boolean).join(", "),
           image: it.images?.[0]?.src ?? it.image?.src,
           images: (it.images ?? []).map((i: any) => i.src),
           price: prices.length ? Math.min(...prices) : null,
@@ -365,6 +374,21 @@ function itemListOf(html: string): Array<Record<string, any>> {
   return out;
 }
 
+/** url -> the small category label printed on each product card (e.g. "Keychains"), when the page shows one. */
+function cardLabels(html: string, pageUrl: string): Map<string, string> {
+  const $ = cheerio.load(html);
+  const out = new Map<string, string>();
+  $("a[href]").each((_, a) => {
+    const href = $(a).attr("href");
+    const h = $(a).find("h1,h2,h3,h4").first();
+    if (!href || !h.length) return;
+    const name = h.text().trim();
+    const label = h.parent().parent().find("span").first().text().trim();
+    if (label && label.length <= 40 && !/[₹\d]/.test(label) && label.toLowerCase() !== name.toLowerCase()) out.set(new URL(href, pageUrl).toString(), label);
+  });
+  return out;
+}
+
 async function jsonldList(c: Crawler, startUrl: string, kind: SizeKind): Promise<CrawlResult> {
   const products: ScrapedProduct[] = [];
   const errors: string[] = [];
@@ -376,6 +400,7 @@ async function jsonldList(c: Crawler, startUrl: string, kind: SizeKind): Promise
     try {
       const { text } = await c.get(u.toString());
       const els = itemListOf(text);
+      const labels = cardLabels(text, u.toString());
       let fresh = 0;
       for (const el of els) {
         const item = (el.item && typeof el.item === "object" ? el.item : el) as Record<string, any>;
@@ -386,7 +411,7 @@ async function jsonldList(c: Crawler, startUrl: string, kind: SizeKind): Promise
         if (seen.has(abs) || !c.sameOrigin(abs)) continue;
         seen.add(abs);
         fresh++;
-        const n = normalize(kind, { url: abs, name: String(item.name ?? el.name ?? ""), image: typeof item.image === "string" ? item.image : item.image?.[0], price: offer.price ?? offer.lowPrice, currency: offer.priceCurrency ?? "INR", stock: offer.availability, raw: el });
+        const n = normalize(kind, { url: abs, category: labels.get(abs), name: String(item.name ?? el.name ?? ""), image: typeof item.image === "string" ? item.image : item.image?.[0], price: offer.price ?? offer.lowPrice, currency: offer.priceCurrency ?? "INR", stock: offer.availability, raw: el });
         if (n) products.push(n);
       }
       if (!els.length || !fresh) break; // an empty or repeated page ends the listing
@@ -399,7 +424,29 @@ async function jsonldList(c: Crawler, startUrl: string, kind: SizeKind): Promise
   return { products, complete, errors };
 }
 
+/** Terms from the supplier's "skip" setting: comma / new-line separated, lower-cased. */
+export function excludeTerms(cfg: { excludeText?: string }): string[] {
+  return (cfg.excludeText ?? "").split(/[,\n]/).map((t) => t.trim().toLowerCase()).filter(Boolean);
+}
+
+/** A product is skipped when its category label (or, if the site shows none, its name) contains a skip term. */
+export function isExcluded(terms: string[], category: string | null | undefined, name: string): boolean {
+  if (!terms.length) return false;
+  const hay = (category?.trim() ? category : name).toLowerCase();
+  return terms.some((t) => hay.includes(t));
+}
+
 export async function crawlSupplier(c: Crawler, url: string, cfg: SupplierConfig, kind: SizeKind): Promise<CrawlResult> {
+  const res = await crawlRaw(c, url, cfg, kind);
+  const terms = excludeTerms(cfg);
+  if (!terms.length) return res;
+  const kept = res.products.filter((p) => !isExcluded(terms, p.category, p.name));
+  const skipped = res.products.length - kept.length;
+  const excludedUrls = res.products.filter((p) => isExcluded(terms, p.category, p.name)).map((p) => p.url);
+  return { ...res, products: kept, excludedUrls, errors: skipped ? [...res.errors, `Note: skipped ${skipped} product(s) matching "${terms.join(", ")}".`] : res.errors };
+}
+
+async function crawlRaw(c: Crawler, url: string, cfg: SupplierConfig, kind: SizeKind): Promise<CrawlResult> {
   if (cfg.adapter === "rendered") return renderedList(c, url, cfg, kind);
   if (cfg.adapter === "shopify") return shopify(c, url, kind);
   if (cfg.adapter === "jsonld-list") return jsonldList(c, url, kind);

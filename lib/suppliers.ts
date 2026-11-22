@@ -13,6 +13,8 @@ export interface SupplierConfig {
   termsAcknowledged: boolean;
   /** Optional: keep only product cards whose text contains this (e.g. "Action Figures"). Used by the rendered adapter. */
   textFilter?: string;
+  /** Skip products whose category label (or name, when the site shows no category) contains any of these comma-separated terms. */
+  excludeText?: string;
 }
 
 const urlList = z.array(z.string()).max(50).optional().default([]);
@@ -26,12 +28,13 @@ const body = z.object({
   sitemapUrls: urlList,
   termsAcknowledged: z.boolean().optional().default(false),
   textFilter: z.string().max(80).optional().default(""),
+  excludeText: z.string().max(200, "Skip list must be 200 characters or fewer.").optional().default(""),
 });
 
 export function parseConfig(raw: string): SupplierConfig {
   try {
     const c = JSON.parse(raw || "{}");
-    return { adapter: c.adapter ?? "jsonld", productUrls: c.productUrls ?? [], sitemapUrls: c.sitemapUrls ?? [], termsAcknowledged: !!c.termsAcknowledged, textFilter: c.textFilter ?? "" };
+    return { adapter: c.adapter ?? "jsonld", productUrls: c.productUrls ?? [], sitemapUrls: c.sitemapUrls ?? [], termsAcknowledged: !!c.termsAcknowledged, textFilter: c.textFilter ?? "", excludeText: c.excludeText ?? "" };
   } catch {
     return { adapter: "jsonld", productUrls: [], sitemapUrls: [], termsAcknowledged: false };
   }
@@ -91,7 +94,7 @@ export function saveSupplier(db: DB, input: unknown): { id: string; status?: str
   const pub = (u: string) => { const h = httpUrl(u); return h && isPublicHost(new URL(h).hostname) ? h : null; };
   const productUrls = v.productUrls.map(pub).filter((u): u is string => !!u);
   const sitemapUrls = v.sitemapUrls.map(pub).filter((u): u is string => !!u);
-  const config: SupplierConfig = { adapter: v.adapter, productUrls, sitemapUrls, termsAcknowledged: true, textFilter: v.textFilter.trim() };
+  const config: SupplierConfig = { adapter: v.adapter, productUrls, sitemapUrls, termsAcknowledged: true, textFilter: v.textFilter.trim(), excludeText: v.excludeText.trim() };
 
   if (!v.id) {
     checkUnique(db, v.categoryId, url, "");
@@ -107,7 +110,7 @@ export function saveSupplier(db: DB, input: unknown): { id: string; status?: str
   if (hasListings && originOf(cur.url) !== originOf(url)) throw badRequest("The website can't be changed after products have been imported. Delete this supplier and register it again.", { field: "url" });
   checkUnique(db, v.categoryId, url, v.id);
   // Only changes that affect what gets scraped require a fresh Test & activate (a rename keeps the status).
-  const sourceChanged = cur.url !== url || cur.config.adapter !== config.adapter || JSON.stringify(cur.config.productUrls) !== JSON.stringify(productUrls) || JSON.stringify(cur.config.sitemapUrls) !== JSON.stringify(sitemapUrls) || (cur.config.textFilter ?? "") !== config.textFilter || cur.categoryId !== v.categoryId;
+  const sourceChanged = cur.url !== url || cur.config.adapter !== config.adapter || JSON.stringify(cur.config.productUrls) !== JSON.stringify(productUrls) || JSON.stringify(cur.config.sitemapUrls) !== JSON.stringify(sitemapUrls) || (cur.config.textFilter ?? "") !== config.textFilter || (cur.config.excludeText ?? "") !== config.excludeText || cur.categoryId !== v.categoryId;
   const status = sourceChanged ? "Paused" : cur.status;
   db.prepare("UPDATE suppliers SET category_id=?, name=?, url=?, status=?, config=? WHERE id=?").run(v.categoryId, v.name, url, status, JSON.stringify(config), v.id);
   audit(db, "Save supplier", { id: v.id, name: v.name, url, categoryId: v.categoryId, sourceChanged });

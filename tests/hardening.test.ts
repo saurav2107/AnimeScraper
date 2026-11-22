@@ -151,3 +151,24 @@ describe("friendly validation errors", () => {
     await expect(call(db, "GET", "products", undefined, {})).rejects.toMatchObject({ message: "Enter a category." });
   });
 });
+
+describe("skip list removes earlier matching listings on the next complete run", () => {
+  it("purges excluded, unmerged listings and keeps merged ones", async () => {
+    const db = mkDb();
+    const { mk } = await setup(db);
+    const a = await mk("A", "https://a.example/f");
+    const p = (n: number, name: string, category: string) => ({ ...prod(`https://a.example/p/${n}`, name, 10 * n), category });
+    const all = [p(1, "Goku", "Figures"), p(2, "Panda", "Keychains"), p(3, "Kitty", "Keychains"), p(4, "Luffy", "Figures")];
+    await call(db, "POST", "run", { selected: [a], wait: true }, {}, fakeCrawl({ "https://a.example/f": all }));
+    const g = (n: number) => (db.prepare("SELECT group_id FROM listings WHERE url=?").get(`https://a.example/p/${n}`) as any).group_id;
+    await call(db, "POST", "merge", { productIds: [g(3), g(4)], name: "Kitty+Luffy", image: null }); // Kitty is a keychain but merged by the user
+    const sup = db.prepare("SELECT category_id c, name, url FROM suppliers WHERE id=?").get(a) as any;
+    await call(db, "POST", "suppliers", { id: a, categoryId: sup.c, name: sup.name, url: sup.url, adapter: "jsonld", termsAcknowledged: true, excludeText: "keychain" });
+    db.prepare("UPDATE suppliers SET status='Active' WHERE id=?").run(a);
+    await call(db, "POST", "run", { selected: [a], wait: true }, {}, { ...fakeCrawl({}), crawl: async () => ({ products: all.filter((x) => x.category === "Figures"), complete: true, errors: [], excludedUrls: ["https://a.example/p/2"] }) });
+    const names = (db.prepare("SELECT name FROM listings ORDER BY name").all() as any[]).map((r) => r.name);
+    expect(names).toEqual(["Goku", "Kitty", "Luffy"]); // Panda purged; merged Kitty kept
+    expect((db.prepare("SELECT COUNT(*) c FROM groups WHERE status='Active' AND NOT EXISTS (SELECT 1 FROM listings l WHERE l.group_id=groups.id)").get() as any).c).toBe(0);
+    expect((db.prepare("SELECT COUNT(*) c FROM audit WHERE action='Purge excluded listings'").get() as any).c).toBe(1);
+  });
+});
