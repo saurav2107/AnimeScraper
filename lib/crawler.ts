@@ -1,82 +1,162 @@
-import {adapter} from './adapters';
-import {decodeHtml,normalizeWooStoreProduct,robotsPolicy} from './intelligence';
-import {safeUrl} from './source-url';
-export interface Page{text:string;headers:Headers}
-export interface CrawlProgress{stage:string;pages:number;discovered:number;expected:number|null;message?:string}
-export interface CrawlResult{products:any[];allowed:(url:string)=>boolean;origin:string;complete:boolean;expected:number|null;errors:string[];pages:number;excluded:number}
-interface Dependencies{read:(url:string,origin:string)=>Promise<Page>;progress?:(p:CrawlProgress)=>Promise<void>;sleep?:(ms:number)=>Promise<void>}
-export function sitemapLocations(xml:string){return [...xml.matchAll(/<(?:\w+:)?(?:url|sitemap)\b[^>]*>\s*<(?:\w+:)?loc\b[^>]*>([\s\S]*?)<\/(?:\w+:)?loc>/gi)].map(m=>decodeHtml(m[1].trim().replace(/^<!\[CDATA\[|\]\]>$/g,'')))}
-export function productLinks(html:string,base:string){const result=new Set<string>();for(const m of html.matchAll(/href\s*=\s*["']([^"']+)["']/gi)){try{const url=new URL(decodeHtml(m[1]),base);if(/\/(?:product|products)\//.test(url.pathname)&&!url.searchParams.has('add-to-cart')){url.hash='';result.add(url.href)}}catch{}}return [...result]}
-export function nextCatalogPages(html:string,base:string){const result=new Set<string>();for(const m of html.matchAll(/<(?:a|link)\b([^>]+)>/gi)){const attributes=m[1];if(!/\brel\s*=\s*["']next["']/i.test(attributes)&&!/\bclass\s*=\s*["'][^"']*\bnext\b[^"']*\bpage-numbers\b/i.test(attributes))continue;const href=attributes.match(/\bhref\s*=\s*["']([^"']+)["']/i)?.[1];if(href){try{const u=new URL(decodeHtml(href),base);u.hash='';result.add(u.href)}catch{}}}return [...result]}
-export async function crawlSupplier(source:any,deps:Dependencies,test=false):Promise<CrawlResult>{
- const config=JSON.parse(source.config);if(!config.termsReviewed)throw Error('Review supplier terms before testing or activating');
- const base=safeUrl(source.url);const robots=(await deps.read(base.origin+'/robots.txt',base.origin)).text;
- const policy=robotsPolicy(robots),allowed=policy.allowed;
- if(!allowed(base.href))throw Error('robots.txt prohibits this source');
- const pause=deps.sleep||((ms:number)=>new Promise<void>(r=>setTimeout(r,ms)));
- const read=async(url:string)=>{const u=safeUrl(url);if(u.origin!==base.origin||!allowed(u.href))throw Error('Source access restrictions prohibit '+url);await pause(policy.delay*1000);return deps.read(u.href,base.origin)};
- const products=new Map<string,any>();const errors:string[]=[];let pages=0,expected:number|null=null,excluded=0;
- const progress=async(stage:string,message?:string)=>deps.progress?.({stage,pages,discovered:products.size,expected,message});
- const accept=(p:any)=>{const url=safeUrl(p.url);if(url.origin!==base.origin)throw Error('Product URL is outside the supplier origin');if(!allowed(p.url)){excluded++;return}if(!p.name)throw Error('Missing product title');products.set(p.url,p)};
- if(config.adapter==='woocommerce-api'){
-  const endpoint=new URL(config.apiPath||'/wp-json/wc/store/v1/products',base.origin);if(endpoint.origin!==base.origin)throw Error('Product API must be on the supplier origin');
-  let pageNumber=1,totalPages:number|null=null,retrieved=0;const rawIds=new Set<number>();
-  while(true){
-   const url=new URL(endpoint);url.searchParams.set('per_page','100');url.searchParams.set('page',String(pageNumber));url.searchParams.set('orderby','id');url.searchParams.set('order','asc');
-   try{
-    const response=await read(url.href);const payload=JSON.parse(response.text);if(!Array.isArray(payload))throw Error('Expected a public WooCommerce product array');pages++;
-    const count=response.headers.get('X-WP-Total'),pageCount=response.headers.get('X-WP-TotalPages');
-    if(count!==null){const n=Number(count);if(!Number.isInteger(n)||n<0)throw Error('Invalid product count');if(expected!==null&&n!==expected)errors.push('Catalog total changed during import; run again to verify complete coverage');expected=n}
-    if(pageCount!==null){const n=Number(pageCount);if(!Number.isInteger(n)||n<0)throw Error('Invalid page count');totalPages=n}
-    for(const item of payload){if(rawIds.has(item.id)){errors.push('Duplicate product across API pages: '+item.id);continue}rawIds.add(item.id);retrieved++;
-     if(item.is_password_protected){excluded++;continue}
-     try{accept(normalizeWooStoreProduct(item))}catch(e:any){errors.push(`${item.permalink||item.id}: ${e.message}`)}
+import { isPublicHost } from "./util";
+
+// Polite fetching: robots.txt, same-origin, 1s delay, retry/backoff, 3MB cap (PRD §3.3, §10).
+
+export const MAX_BYTES = 3 * 1024 * 1024;
+const UA = "AnimeCartelSupplierIntelligence/1.0 (internal price comparison)";
+
+export interface CrawlOptions {
+  delayMs?: number;
+  retries?: number;
+  /** Request budget (used by the bounded Test & activate crawl). */
+  maxRequests?: number;
+  /** Per-request timeout in ms (default 20s). */
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+}
+
+/** Turn undici's opaque "fetch failed" into something actionable (host + reason code). */
+export function describeNetworkError(e: unknown, url: string): string {
+  const host = (() => { try { return new URL(url).host; } catch { return url; } })();
+  const err = e as { name?: string; message?: string; cause?: { code?: string; message?: string } };
+  if (err?.name === "TimeoutError" || err?.name === "AbortError") return `${host}: request timed out`;
+  const code = err?.cause?.code;
+  const map: Record<string, string> = { ENOTFOUND: "host not found", ECONNREFUSED: "connection refused", ECONNRESET: "connection reset", ETIMEDOUT: "connection timed out", CERT_HAS_EXPIRED: "TLS certificate expired" };
+  if (code) return `${host}: ${map[code] ?? code}`;
+  const msg = err?.message ?? "request failed";
+  return /^HTTP \d+|robots|Blocked|redirect|too large|budget|Cross-origin/i.test(msg) ? msg : `${host}: ${msg === "fetch failed" ? "network error" : msg}`;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export class Crawler {
+  private robots = new Map<string, Array<{ allow: boolean; re: RegExp; len: number }>>();
+  private last = 0;
+  private delayMs: number;
+  private retries: number;
+  private f: typeof fetch;
+  private budget: number;
+  private used = 0;
+  private timeoutMs: number;
+  constructor(public origin: string, opts: CrawlOptions = {}) {
+    this.timeoutMs = opts.timeoutMs ?? 20000;
+    this.delayMs = opts.delayMs ?? 1000;
+    this.retries = opts.retries ?? 2;
+    this.budget = opts.maxRequests ?? Infinity;
+    this.f = opts.fetchImpl ?? ((...a) => fetch(...a));
+  }
+
+  /** One fetch with timeout; redirects are followed manually (max 3) and only within the same public origin. */
+  private async request(url: string, init: RequestInit): Promise<Response> {
+    let cur = url;
+    for (let hop = 0; hop <= 3; hop++) {
+      if (!this.sameOrigin(cur) || !isPublicHost(new URL(cur).hostname)) throw new Error(`Blocked request to ${new URL(cur).host}`);
+      const res = await this.f(cur, { ...init, redirect: "manual", signal: AbortSignal.timeout(this.timeoutMs) });
+      if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
+        cur = new URL(res.headers.get("location")!, cur).toString();
+        continue;
+      }
+      return res;
     }
-    await progress('Importing catalog pages');
-    if(test||totalPages!==null&&pageNumber>=totalPages||totalPages===null&&payload.length<100)break;
-    if(pageNumber>=10000)throw Error('API safety limit reached; import is incomplete');pageNumber++;
-   }catch(e:any){errors.push(`API page ${pageNumber}: ${e.message}`);break}
+    throw new Error("Too many redirects");
   }
-  if(!test&&expected!==null&&retrieved!==expected)errors.push(`Incomplete API coverage: retrieved ${retrieved} of ${expected} products`);
-  if(!products.size)throw Error(errors.join('; ')||'No public products returned by the API');
-  return {products:[...products.values()],allowed,origin:base.origin,complete:errors.length===0,expected,errors,pages,excluded};
- }
- const urls=new Set<string>([base.href]);
- for(const path of config.productUrls||[]){const u=new URL(path,base);if(u.origin===base.origin&&allowed(u.href))urls.add(u.href)}
- const sitemapProducts=new Set<string>();
- if(!test){
-  const maps=new Set<string>([...robots.matchAll(/^sitemap\s*:\s*(\S+)/gim)].map(m=>m[1]));
-  for(const path of config.sitemapUrls||[])maps.add(new URL(path,base).href);
-  let traversed=0;
-  for(const url of maps){
-   try{if(++traversed>1000)throw Error('Sitemap safety limit reached; import is incomplete');const xml=(await read(url)).text;
-    const locs=sitemapLocations(xml);
-    if(/<(?:\w+:)?sitemapindex\b/i.test(xml)){
-     const productMaps=locs.filter(l=>/product/i.test(new URL(l).pathname)&&!/(?:product[_-](?:cat|tag|brand))/.test(new URL(l).pathname));
-     for(const child of productMaps.length?productMaps:locs){const u=new URL(child,base);if(u.origin===base.origin&&allowed(u.href))maps.add(u.href)}
-    }else for(const loc of locs){const u=new URL(loc,base);if(u.origin===base.origin&&allowed(u.href)&&(/\/products?\//.test(u.pathname)||/product/i.test(new URL(url).pathname))){sitemapProducts.add(u.href);urls.add(u.href)}}
-    await progress('Discovering product URLs');
-   }catch(e:any){errors.push(`Sitemap ${url}: ${e.message}`)}
+
+  sameOrigin(url: string) {
+    try {
+      return new URL(url).origin === this.origin;
+    } catch {
+      return false;
+    }
   }
- }
- expected=sitemapProducts.size||null;
- // Traverse to exhaustion. Bounds are explicit failures, never silent samples.
- let visited=0;
- for(const url of urls){
-  if(++visited>100000){errors.push('URL safety limit reached; import is incomplete');break}
-  try{
-   const html=(await read(url)).text;pages++;
-   const extracted=adapter(config.adapter).extract(html,url);for(const p of extracted)accept(p);
-   if((sitemapProducts.has(url)||/\/products?\//.test(new URL(url).pathname))&&!extracted.length)errors.push(`No product data extracted from ${url}`);
-   if(config.adapter==='woocommerce'){
-    for(const link of nextCatalogPages(html,url)){const u=new URL(link);if(u.origin===base.origin&&allowed(link))urls.add(link)}
-    if(!extracted.length)for(const link of productLinks(html,url))if(new URL(link).origin===base.origin&&allowed(link))urls.add(link);
-   }else if(!sitemapProducts.size)for(const link of productLinks(html,url))if(new URL(link).origin===base.origin&&allowed(link))urls.add(link);
-   await progress('Extracting products');
-   if(test&&products.size)break;
-  }catch(e:any){errors.push(`${url}: ${e.message}`)}
- }
- if(!products.size)throw Error(errors.join('; ')||'No product data found. Configure a public product API, sitemap or category page. Existing records were preserved.');
- if(!test&&expected!==null&&products.size<expected)errors.push(`Incomplete sitemap coverage: extracted ${products.size} of ${expected} products`);
- return {products:[...products.values()],allowed,origin:base.origin,complete:errors.length===0,expected,errors,pages,excluded};
+
+  private async loadRobots() {
+    if (this.robots.has(this.origin)) return;
+    const rules: Array<{ allow: boolean; re: RegExp; len: number }> = [];
+    const toRe = (pat: string) => new RegExp("^" + pat.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\\\$$/, "$"));
+    try {
+      const res = await this.request(`${this.origin}/robots.txt`, { headers: { "user-agent": UA } });
+      if (res.ok) {
+        let applies = false;
+        let prevWasAgent = false;
+        for (const line of (await res.text()).split(/\r?\n/)) {
+          const l = line.split("#")[0].trim();
+          const m = /^([a-z-]+)\s*:\s*(.*)$/i.exec(l);
+          if (!m) continue;
+          const k = m[1].toLowerCase();
+          const v = m[2].trim();
+          if (k === "user-agent") {
+            const hit = v === "*" || UA.toLowerCase().includes(v.toLowerCase());
+            applies = prevWasAgent ? applies || hit : hit; // consecutive User-agent lines share one rule group
+            prevWasAgent = true;
+            continue;
+          }
+          prevWasAgent = false;
+          if (applies && (k === "disallow" || k === "allow") && v) rules.push({ allow: k === "allow", re: toRe(v), len: v.length });
+        }
+      }
+    } catch {
+      /* no robots => allowed */
+    }
+    this.robots.set(this.origin, rules);
+  }
+
+  /** RFC 9309: the longest matching rule wins; Allow beats Disallow on a tie. */
+  async allowed(url: string): Promise<boolean> {
+    await this.loadRobots();
+    const u = new URL(url);
+    const path = u.pathname + u.search;
+    let best: { allow: boolean; len: number } | null = null;
+    for (const r of this.robots.get(this.origin) ?? []) {
+      if (r.re.test(path) && (!best || r.len > best.len || (r.len === best.len && r.allow))) best = r;
+    }
+    return !best || best.allow;
+  }
+
+  private async throttle() {
+    const wait = this.last + this.delayMs - Date.now();
+    if (wait > 0) await sleep(wait);
+    this.last = Date.now();
+  }
+
+  /** Returns response text; throws on policy or network failure. */
+  async get(url: string, accept?: string): Promise<{ text: string; headers: Headers; status: number }> {
+    if (!this.sameOrigin(url)) throw new Error(`Cross-origin request blocked: ${url}`);
+    if (!(await this.allowed(url))) throw new Error(`Blocked by robots.txt: ${url}`);
+    if (++this.used > this.budget) throw new Error("Request budget reached");
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= this.retries; attempt++) {
+      await this.throttle();
+      try {
+        const res = await this.request(url, { headers: { "user-agent": UA, accept: accept ?? "text/html,application/xhtml+xml,application/xml,application/json" } });
+        if (res.status === 429 || res.status >= 500) {
+          lastErr = new Error(`HTTP ${res.status}`);
+          await sleep(this.delayMs * (attempt + 1) * 2);
+          continue;
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+        const len = Number(res.headers.get("content-length") ?? 0);
+        if (len > MAX_BYTES) throw new Error("Response too large");
+        const text = await res.text();
+        if (text.length > MAX_BYTES) throw new Error("Response too large");
+        return { text, headers: res.headers, status: res.status };
+      } catch (e) {
+        lastErr = e;
+        if (e instanceof Error && /HTTP 4\d\d|robots|Cross-origin|too large|budget|Blocked|redirects/.test(e.message)) throw e;
+        await sleep(this.delayMs * (attempt + 1));
+      }
+    }
+    throw new Error(describeNetworkError(lastErr, url));
+  }
+
+  /** HEAD check used for conservative removal verification. */
+  async head(url: string): Promise<number | null> {
+    try {
+      if (!this.sameOrigin(url)) return null;
+      await this.throttle();
+      const res = await this.request(url, { method: "HEAD", headers: { "user-agent": UA } });
+      return res.status;
+    } catch {
+      return null;
+    }
+  }
 }
