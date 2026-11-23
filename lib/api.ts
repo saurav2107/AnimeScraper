@@ -1,9 +1,9 @@
 import type { DB } from "@/db";
 import { deleteCategory, listCategories, saveCategory } from "./categories";
 import { exportData } from "./export";
-import { HttpError, notFound } from "./errors";
+import { notFound } from "./errors";
 import { listMerges, mergeProducts, undoImpact, unmerge } from "./merge";
-import { getProduct, listProducts, mergePreview } from "./products";
+import { getProduct, listProducts, mergePreview, setProductSize, setProductsHidden } from "./products";
 import { badRequest } from "./errors";
 import { acknowledge, onAutomaticEnabled, recoverLock, runNow, scheduled, scheduleSettings, testSupplier, type RunDeps } from "./scrape";
 import { appState } from "./summary";
@@ -15,7 +15,6 @@ export interface ApiRequest {
   path: string[];
   query: Record<string, string | undefined>;
   body: any;
-  demo?: boolean;
 }
 
 /** Central dispatcher (PRD §9). Returns the JSON body; throws HttpError for 4xx. */
@@ -23,7 +22,6 @@ export async function api(db: DB, req: ApiRequest, deps: RunDeps = {}): Promise<
   const { method, path, query, body } = req;
   const route = path.join("/");
   const mutating = method !== "GET";
-  if (mutating && req.demo) throw new HttpError(403, "Demo mode is read-only.");
 
   if (method === "GET") {
     if (route === "state") return appState(db);
@@ -49,6 +47,8 @@ export async function api(db: DB, req: ApiRequest, deps: RunDeps = {}): Promise<
       case "recover": return recoverLock(db);
       case "acknowledge": return acknowledge(db, body ?? {});
       case "merge": return mergeProducts(db, body);
+      case "product-size": return setProductSize(db, body ?? {});
+      case "products-hide": return setProductsHidden(db, body ?? {});
       case "unmerge": return unmerge(db, body);
       case "settings": {
         if (body?.time !== undefined && !(typeof body.time === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(body.time))) throw badRequest("Enter a valid time (HH:MM).", { field: "time" });

@@ -9,7 +9,7 @@ export type DB = Database.Database;
 
 const MIGRATIONS = path.join(process.cwd(), "drizzle");
 
-/** Open (and migrate) a SQLite database. Use ":memory:" for tests and the demo workspace. */
+/** Open (and migrate) a SQLite database. Use ":memory:" for tests. */
 export function createDb(file: string): DB {
   if (file !== ":memory:") fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new Database(file);
@@ -19,7 +19,7 @@ export function createDb(file: string): DB {
   return db;
 }
 
-const g = globalThis as unknown as { __live?: DB; __demo?: DB };
+const g = globalThis as unknown as { __live?: DB };
 
 export function liveDb(): DB {
   if (!g.__live) {
@@ -27,14 +27,4 @@ export function liveDb(): DB {
     recoverOrphans(g.__live); // a restart interrupts any in-flight run
   }
   return g.__live;
-}
-
-export async function demoDb(): Promise<DB> {
-  if (!g.__demo) {
-    const db = createDb(":memory:");
-    const { seedDemo } = await import("../lib/demo");
-    seedDemo(db);
-    g.__demo = db;
-  }
-  return g.__demo;
 }

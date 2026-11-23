@@ -1,9 +1,5 @@
 "use client";
-// Browser-side API wrapper. Demo workspace sends a header so the server uses the read-only sample DB.
-
-let demo = false;
-export const setDemo = (v: boolean) => (demo = v);
-export const isDemo = () => demo;
+// Browser-side API wrapper.
 
 export class ApiError extends Error {
   constructor(message: string, public status: number, public data: any) {
@@ -17,7 +13,7 @@ export async function http<T = any>(method: string, path: string, body?: unknown
     : "";
   const res = await fetch(`/api/${path}${qs === "?" ? "" : qs}`, {
     method,
-    headers: { "content-type": "application/json", ...(demo ? { "x-workspace": "demo" } : {}) },
+    headers: { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));

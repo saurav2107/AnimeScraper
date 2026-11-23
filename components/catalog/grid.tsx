@@ -1,15 +1,16 @@
 "use client";
 import clsx from "clsx";
-import { ArrowDown, ArrowUp, Columns3, Search, SlidersHorizontal, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns3, Pencil, Search, SlidersHorizontal, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Alert, Badge, Button, Empty, Modal, Skeleton, Thumb, useDismiss } from "@/components/ui";
-import { get, isDemo, post } from "@/lib/client";
+import {get, post } from "@/lib/client";
 import { MergeDialog } from "./merge-dialog";
 import { PriceCell, type Cell } from "./price-cell";
+import { SizeDialog, type SizeTarget } from "./size-dialog";
 import { ProductDetail, SupplierListings } from "./product-detail";
 
-interface Item { id: string; name: string; image: string | null; size: string | null; lowestPrice: number | null; isMerged: boolean; cells: Record<string, Cell> }
+interface Item { id: string; name: string; image: string | null; size: string | null; sizeManual: boolean; lowestPrice: number | null; isMerged: boolean; cells: Record<string, Cell> }
 interface Supplier { id: string; name: string; status: string }
 
 const LS = {
@@ -17,8 +18,8 @@ const LS = {
   set(k: string, v: string) { try { localStorage.setItem(k, v); } catch { /* ignore (EC-27) */ } },
 };
 
-const WIDE = { check: 40, image: 64, name: 260, size: 96, supplier: 140 };
-const NARROW = { check: 32, image: 56, name: 150, size: 72, supplier: 120 };
+const WIDE = { check: 40, image: 112, name: 260, size: 96, supplier: 140 };
+const NARROW = { check: 32, image: 84, name: 150, size: 72, supplier: 120 };
 
 /** Below 900px only the checkbox and name stay pinned; image and size scroll with the prices. */
 function useNarrow() {
@@ -52,6 +53,8 @@ export function ProductGrid({
   const [maxP, setMaxP] = useState("");
   const [fNew, setFNew] = useState(false);
   const [fPc, setFPc] = useState(false);
+  const [showHidden, setShowHidden] = useState(false);
+  const [fSup, setFSup] = useState<Set<string>>(new Set());
   const [showFilters, setShowFilters] = useState(false);
   const [showCols, setShowCols] = useState(false);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
@@ -69,6 +72,7 @@ export function ProductGrid({
   const [more, setMore] = useState<{ productId: string; supplierId: string; supplierName: string } | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [ackOpen, setAckOpen] = useState(false);
+  const [sizeFor, setSizeFor] = useState<SizeTarget | null>(null);
   const narrow = useNarrow();
   const W = narrow ? NARROW : WIDE;
   const LEFT = narrow ? { check: 0, image: 0, name: W.check, size: 0 } : { check: 0, image: W.check, name: W.check + W.image, size: W.check + W.image + W.name };
@@ -92,6 +96,7 @@ export function ProductGrid({
   useEffect(() => {
     if (!categoryId) return;
     try { setHidden(new Set(JSON.parse(LS.get(`cols:${categoryId}`) ?? "[]"))); } catch { setHidden(new Set()); }
+    setFSup(new Set()); setShowHidden(false);
     setSelected(new Map()); // selection is cleared on category switch (FR-GRID-01)
   }, [categoryId]);
 
@@ -99,7 +104,9 @@ export function ProductGrid({
     category: categoryId ?? undefined, q: qDebounced || undefined, sort,
     inStock: inStock ? "1" : undefined, minPrice: priceInvalid ? undefined : minP || undefined, maxPrice: priceInvalid ? undefined : maxP || undefined,
     new: newOn ? "1" : undefined, priceChanged: pcOn ? "1" : undefined,
-  }), [categoryId, qDebounced, sort, inStock, minP, maxP, priceInvalid, newOn, pcOn]);
+    hidden: showHidden ? "1" : undefined,
+    suppliers: fSup.size ? [...fSup].sort().join(",") : undefined,
+  }), [categoryId, qDebounced, sort, inStock, minP, maxP, priceInvalid, newOn, pcOn, fSup, showHidden]);
 
   useEffect(() => { onQuery?.(params as Record<string, string | undefined>); }, [params, onQuery]);
 
@@ -138,7 +145,9 @@ export function ProductGrid({
     return () => io.disconnect();
   }, [cursor, loading, load]);
 
-  const visibleSuppliers = suppliers.filter((s) => !hidden.has(s.id));
+  const supFilterOn = suppliers.some((s) => fSup.has(s.id));
+  const visibleSuppliers = suppliers.filter((s) => !hidden.has(s.id) && (!supFilterOn || fSup.has(s.id)));
+  const toggleSup = (id: string) => setFSup((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const fallbackSort = sort.startsWith("supplier:") && !suppliers.some((s) => sort.split(":")[1] === s.id);
   useEffect(() => { if (fallbackSort && suppliers.length) setSort("name_asc"); }, [fallbackSort, suppliers.length]);
 
@@ -150,8 +159,8 @@ export function ProductGrid({
   };
   const cycleSort = (asc: string, desc: string) => setSort(sort === asc ? desc : asc);
   const arrow = (asc: string, desc: string) => (sort === asc ? <ArrowUp className="size-3" /> : sort === desc ? <ArrowDown className="size-3" /> : null);
-  const activeFilters = (inStock ? 1 : 0) + (minP || maxP ? 1 : 0) + (!preset && fNew ? 1 : 0) + (!preset && fPc ? 1 : 0);
-  const resetFilters = () => { setInStock(false); setMinP(""); setMaxP(""); setFNew(false); setFPc(false); };
+  const activeFilters = (inStock ? 1 : 0) + (minP || maxP ? 1 : 0) + (!preset && fNew ? 1 : 0) + (!preset && fPc ? 1 : 0) + (supFilterOn ? 1 : 0) + (showHidden ? 1 : 0);
+  const resetFilters = () => { setInStock(false); setMinP(""); setMaxP(""); setFNew(false); setFPc(false); setFSup(new Set()); setShowHidden(false); };
   const toggleSel = (it: Item) => setSelected((m) => { const n = new Map(m); n.has(it.id) ? n.delete(it.id) : n.set(it.id, it.name); return n; });
 
   const sizeHeader = catInfo ? `${catInfo.sizeLabel}${catInfo.sizeUnit ? ` ${catInfo.sizeUnit}` : ""}` : "Size";
@@ -174,7 +183,7 @@ export function ProductGrid({
             {categories.map((c) => <option key={c.id} value={c.id}>{c.name}{preset ? "" : ` (${c.productCount})`}</option>)}
           </select>
         )}
-        {preset === "new" && total > 0 && <Button variant="outline" size="sm" disabled={isDemo()} onClick={() => setAckOpen(true)}>Acknowledge all</Button>}
+        {preset === "new" && total > 0 && <Button variant="outline" size="sm" onClick={() => setAckOpen(true)}>Acknowledge all</Button>}
         <span className="text-sm text-gray-500" aria-live="polite">{loading ? "Loading…" : `${total.toLocaleString()} ${total === 1 ? "product" : "products"}`}</span>
       </div>
 
@@ -201,6 +210,21 @@ export function ProductGrid({
               <label className="flex items-center justify-between text-sm">In stock<input type="checkbox" checked={inStock} onChange={(e) => setInStock(e.target.checked)} /></label>
               <label className="flex items-center justify-between text-sm">New<input type="checkbox" checked={newOn} disabled={preset === "new"} onChange={(e) => setFNew(e.target.checked)} /></label>
               <label className="flex items-center justify-between text-sm">Price changed<input type="checkbox" checked={pcOn} disabled={preset === "priceChanged"} onChange={(e) => setFPc(e.target.checked)} /></label>
+              <label className="flex items-center justify-between text-sm" title="Products you hid stay hidden after every scrape">Hidden items only<input type="checkbox" checked={showHidden} onChange={(e) => { setShowHidden(e.target.checked); setSelected(new Map()); }} /></label>
+              {suppliers.length > 0 && (
+                <div>
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="label !mb-0">Suppliers</span>
+                    {supFilterOn && <button type="button" className="text-xs text-indigo-600 hover:underline" onClick={() => setFSup(new Set())}>All suppliers</button>}
+                  </div>
+                  <div className="max-h-40 space-y-1 overflow-y-auto">
+                    {suppliers.map((s) => (
+                      <label key={s.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={fSup.has(s.id)} onChange={() => toggleSup(s.id)} />{s.name}</label>
+                    ))}
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">{supFilterOn ? "Showing only products listed by the ticked suppliers." : "None ticked = all suppliers."}</p>
+                </div>
+              )}
               <div>
                 <span className="label">Price range (₹)</span>
                 <div className="flex gap-2">
@@ -237,11 +261,11 @@ export function ProductGrid({
               <th className={clsx(stickyHead, "z-30 border-b th")} style={{ width: W.name, minWidth: W.name, ...pin("name") }}>
                 <button className="inline-flex items-center gap-1 uppercase" onClick={() => cycleSort("name_asc", "name_desc")}>Name {arrow("name_asc", "name_desc")}</button>
               </th>
-              <th className={clsx(stickyHead, "z-30 border-b border-r th")} style={{ width: W.size, minWidth: W.size, ...pin("size") }}>
+              <th className={clsx(stickyHead, "z-30 border-b border-r th text-center")} style={{ width: W.size, minWidth: W.size, ...pin("size") }}>
                 <button className="inline-flex items-center gap-1 uppercase" onClick={() => cycleSort("size_asc", "size_desc")}>{sizeHeader} {arrow("size_asc", "size_desc")}</button>
               </th>
               {visibleSuppliers.map((s) => (
-                <th key={s.id} className={clsx(stickyHead, "border-b th text-right")} style={{ width: W.supplier, minWidth: W.supplier }} title={s.name}>
+                <th key={s.id} className={clsx(stickyHead, "border-b th text-center")} style={{ width: W.supplier, minWidth: W.supplier }} title={s.name}>
                   <button className="inline-flex items-center gap-1 uppercase" onClick={() => cycleSort(`supplier:${s.id}:asc`, `supplier:${s.id}:desc`)}>
                     <span className={clsx("size-2 rounded-full", s.status === "Active" ? "bg-green-500" : "bg-gray-400")} />
                     {s.name.length > 18 ? s.name.slice(0, 17) + "…" : s.name}
@@ -263,14 +287,19 @@ export function ProductGrid({
                   <td className={clsx("border-b px-2", bg)} style={{ ...pin("check"), zIndex: 10 }}>
                     <input type="checkbox" aria-label={`Select ${it.name}`} checked={sel} onChange={() => toggleSel(it)} />
                   </td>
-                  <td className={clsx("border-b px-2", bg)} style={{ ...pin("image"), zIndex: 10 }}><Thumb src={it.image} size={48} alt={it.name} zoom /></td>
+                  <td className={clsx("border-b px-2", bg)} style={{ ...pin("image"), zIndex: 10 }}><Thumb src={it.image} size={narrow ? 72 : 96} alt={it.name} zoom /></td>
                   <td className={clsx("border-b px-3", bg)} style={{ ...pin("name"), zIndex: 10, maxWidth: W.name }}>
                     <button onClick={() => setDetail(it.id)} title={it.name} className="line-clamp-2 text-left font-medium hover:text-indigo-700 hover:underline">{it.name}</button>
                     {it.isMerged && <Badge tone="indigo">Merged</Badge>}
                   </td>
-                  <td className={clsx("border-b border-r px-3 text-gray-700", bg)} style={{ ...pin("size"), zIndex: 10 }}>{it.size ?? "—"}</td>
+                  <td className={clsx("border-b border-r px-1 text-gray-700", bg)} style={{ ...pin("size"), zIndex: 10 }}>
+                    <button type="button" onClick={() => setSizeFor({ id: it.id, name: it.name, size: it.size, sizeManual: it.sizeManual })} title={it.sizeManual ? "Entered manually. Click to change" : it.size ? "From the supplier listing. Click to enter your own" : "No size found. Click to enter one"} aria-label={`Edit ${catInfo?.sizeLabel ?? "size"} of ${it.name}`} className="group/size flex w-full items-center justify-center gap-1 rounded px-2 py-1 text-left hover:bg-indigo-50">
+                      <span className={it.size ? "" : "text-gray-400"}>{it.size ?? "—"}</span>
+                      {it.sizeManual ? <Pencil className="size-3 text-indigo-600" aria-label="entered manually" /> : <Pencil className="size-3 text-gray-300 opacity-0 group-hover/size:opacity-100" />}
+                    </button>
+                  </td>
                   {visibleSuppliers.map((s) => (
-                    <td key={s.id} className={clsx("border-b px-3 text-right", bg)}>
+                    <td key={s.id} className={clsx("border-b px-3 text-center", bg)}>
                       <PriceCell cell={it.cells[s.id] ?? { state: "none" }} onMore={() => setMore({ productId: it.id, supplierId: s.id, supplierName: s.name })} />
                     </td>
                   ))}
@@ -306,7 +335,8 @@ export function ProductGrid({
       {selected.size > 0 && (
         <div className="sticky bottom-0 flex items-center gap-3 rounded-lg border bg-white px-4 py-2.5 shadow-lg" role="region" aria-label="Selection">
           <b>{selected.size} selected</b>
-          <Button disabled={selected.size < 2 || isDemo()} onClick={() => setMergeOpen(true)} title={isDemo() ? "Merging is disabled in demo mode" : selected.size < 2 ? "Select at least two products" : undefined}>Merge</Button>
+          <Button variant="outline" onClick={async () => { try { const ids = [...selected.keys()]; const r = await post("products-hide", { productIds: ids, hidden: !showHidden }); setSelected(new Map()); toast.success(`${r.count} product${r.count === 1 ? "" : "s"} ${showHidden ? "restored to the grid" : "hidden. They stay hidden after future scrapes"}`); onChanged(); void load(false, null); } catch (e) { toast.error((e as Error).message); } }}>{showHidden ? "Unhide" : "Hide"}</Button>
+          {!showHidden && <Button disabled={selected.size < 2} onClick={() => setMergeOpen(true)} title={selected.size < 2 ? "Select at least two products" : undefined}>Merge</Button>}
           {onExportSelected && <Button variant="outline" onClick={() => onExportSelected([...selected.keys()])}>Export selected</Button>}
           <Button variant="ghost" onClick={() => setSelected(new Map())}>Clear</Button>
         </div>
@@ -316,6 +346,7 @@ export function ProductGrid({
         <p className="text-sm text-gray-600">Every new listing in {catInfo?.name ?? "this category"} will be marked as seen and will leave New Arrivals. Prices and products are not changed.</p>
       </Modal>
       <ProductDetail productId={detail} onClose={() => setDetail(null)} onChanged={() => { onChanged(); void load(false, null); }} />
+      <SizeDialog target={sizeFor} category={catInfo} onClose={() => setSizeFor(null)} onSaved={() => { void load(false, null); }} />
       <SupplierListings target={more} onClose={() => setMore(null)} />
       <MergeDialog
         open={mergeOpen}

@@ -42,7 +42,7 @@ export function exportData(db: DB, q: Record<string, string | undefined>) {
   for (const part of chunks) {
     const ph = placeholders(part.length);
     const gs = db.prepare(
-      `SELECT g.id, g.name, g.image, c.name AS category, c.size_label AS sizeLabel, c.size_unit AS sizeUnit,
+      `SELECT g.id, g.name, g.image, g.size_value AS manualSize, c.name AS category, c.size_label AS sizeLabel, c.size_unit AS sizeUnit,
          EXISTS (SELECT 1 FROM merge_events me WHERE me.result_group_id = g.id AND me.undone_at IS NULL) AS merged
        FROM groups g JOIN categories c ON c.id = g.category_id WHERE g.id IN (${ph}) AND g.status = 'Active'`,
     ).all(...part) as any[];
@@ -53,7 +53,7 @@ export function exportData(db: DB, q: Record<string, string | undefined>) {
     for (const g of gs) {
       const mine = ls.filter((l) => l.groupId === g.id);
       const prices = mine.filter((l) => l.currency === "INR" && l.price != null && l.stock !== "Out of stock" && l.status !== "REMOVED").map((l) => l.price);
-      const size = mine.find((l) => l.sizeValue)?.sizeValue ?? null;
+      const size = g.manualSize ?? mine.find((l) => l.sizeValue)?.sizeValue ?? null;
       const row: Record<string, unknown> = {
         "Product ID": g.id, Name: g.name, Category: g.category, Image: g.image ?? mine.find((l) => l.image)?.image ?? "",
         "Size Type": g.sizeLabel, Size: size ?? "", "Size Unit": g.sizeUnit ?? "", "Merged (Yes/No)": g.merged ? "Yes" : "No",

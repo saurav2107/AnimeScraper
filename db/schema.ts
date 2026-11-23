@@ -32,7 +32,8 @@ export const groups = sqliteTable(
     categoryId: text("category_id").notNull().references(() => categories.id),
     name: text("name").notNull(),
     image: text("image"),
-    status: text("status", { enum: ["Active", "Merged", "Retired"] }).notNull().default("Active"),
+    sizeValue: text("size_value"), // size typed in by the operator; wins over scraped listing sizes and survives re-scrapes
+    status: text("status", { enum: ["Active", "Merged", "Retired", "Hidden"] }).notNull().default("Active"),
     mergedIntoEventId: text("merged_into_event_id"),
     created: text("created").notNull(),
   },
@@ -62,7 +63,7 @@ export const listings = sqliteTable(
     scraped: text("scraped").notNull(),
     created: text("created").notNull(),
   },
-  (t) => [uniqueIndex("listings_url_uq").on(t.url), index("listings_group").on(t.groupId), index("listings_supplier").on(t.supplierId), index("listings_status").on(t.status)],
+  (t) => [uniqueIndex("listings_supplier_url_uq").on(t.supplierId, t.url), index("listings_url").on(t.url), index("listings_group").on(t.groupId), index("listings_supplier").on(t.supplierId), index("listings_status").on(t.status)],
 );
 
 export const mergeEvents = sqliteTable("merge_events", {

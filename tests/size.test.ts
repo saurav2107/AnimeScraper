@@ -7,9 +7,16 @@ describe("size extraction (FR-SCR-05)", () => {
     expect(extractSize("height", ["Height: 250 mm"])).toBe("25");
     expect(extractSize("height", ["Statue, 10 inch high"])).toBe("25.4");
   });
+  it("height: a lone unlabelled measurement in the name is the height", () => {
+    expect(extractSize("height", ["Goku Action Figure 30cm"])).toBe("30");
+    expect(extractSize("height", ["Naruto Statue 10 inch"])).toBe("25.4");
+    expect(extractSize("height", ["Goku 30cm", "Height: 25cm"])).toBe("25"); // labelled value wins
+    expect(extractSize("height", ["Katana 5 in 1 set"])).toBeNull();
+  });
   it("height: conflicting anchored values -> null, unanchored -> null", () => {
     expect(extractSize("height", ["Figure Height: 25cm Height: 30cm"])).toBeNull();
-    expect(extractSize("height", ["Goku 30cm"])).toBeNull();
+    expect(extractSize("height", ["Goku 30cm and 12cm base"])).toBeNull();
+    expect(extractSize("height", ["Goku", "Weighs 30cm of cable"])).toBeNull(); // bare fallback is name-only
   });
   it("falls through sources: name, description, attributes", () => {
     expect(extractSize("height", ["Goku figure", "Stands 18cm tall"])).toBe("18");

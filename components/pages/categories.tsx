@@ -3,7 +3,7 @@ import clsx from "clsx";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Alert, Button, Card, Empty, FieldError, Modal, PageHeader } from "@/components/ui";
-import { ApiError, del, isDemo, post } from "@/lib/client";
+import {ApiError, del, post } from "@/lib/client";
 
 const DEFAULTS: Record<string, { label: string; unit: string }> = { height: { label: "Height", unit: "cm" }, length: { label: "Length", unit: "cm" }, scale: { label: "Scale", unit: "ratio" }, other: { label: "", unit: "" } };
 
@@ -49,7 +49,7 @@ export function CategoriesPage({ categories, suppliers, onChanged, goSuppliers }
 
   return (
     <>
-      <PageHeader title="Categories" subtitle="A category defines what a supplier registration fetches and what “Size” means." actions={<Button disabled={isDemo()} onClick={() => open()}>Add category</Button>} />
+      <PageHeader title="Categories" subtitle="A category defines what a supplier registration fetches and what “Size” means." actions={<Button onClick={() => open()}>Add category</Button>} />
       {categories.length === 0 ? (
         <Empty title="No categories yet">Create a category before registering suppliers.</Empty>
       ) : (
@@ -63,7 +63,7 @@ export function CategoriesPage({ categories, suppliers, onChanged, goSuppliers }
                   <td className="td">{c.sizeLabel}{c.sizeUnit ? ` (${c.sizeUnit})` : ""}</td>
                   <td className="td text-right">{c.supplierCount}</td>
                   <td className="td text-right">{c.productCount}</td>
-                  <td className="td sticky right-0 bg-white text-right"><div className="flex justify-end gap-2"><Button size="sm" variant="outline" disabled={isDemo()} onClick={() => open(c)}>Edit</Button><Button size="sm" variant="outline" disabled={isDemo()} onClick={() => { setDelErr(null); setRemoving(c); }}>Delete</Button></div></td>
+                  <td className="td sticky right-0 bg-white text-right"><div className="flex justify-end gap-2"><Button size="sm" variant="outline" onClick={() => open(c)}>Edit</Button><Button size="sm" variant="outline" onClick={() => { setDelErr(null); setRemoving(c); }}>Delete</Button></div></td>
                 </tr>
               ))}
             </tbody>

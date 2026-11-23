@@ -3,7 +3,7 @@ import clsx from "clsx";
 import { useEffect, useState } from "react";
 import { Maximize2 } from "lucide-react";
 import { Alert, Button, Lightbox, Modal, Skeleton, Thumb } from "@/components/ui";
-import { get, post } from "@/lib/client";
+import {get, post } from "@/lib/client";
 
 export function MergeDialog({ open, ids, onClose, onMerged }: { open: boolean; ids: string[]; onClose: () => void; onMerged: (name: string, n: number) => void }) {
   const [prev, setPrev] = useState<any>(null);

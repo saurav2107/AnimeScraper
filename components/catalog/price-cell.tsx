@@ -1,6 +1,6 @@
 "use client";
 import clsx from "clsx";
-import { fmtPrice } from "@/lib/client";
+import {fmtPrice } from "@/lib/client";
 
 export interface Cell {
   state: "none" | "removed" | "oos" | "no_price" | "price";
@@ -32,8 +32,8 @@ export function PriceCell({ cell, onMore }: { cell: Cell; onMore: () => void }) 
   let main: React.ReactNode;
   if (cell.state === "oos") {
     main = (
-      <span aria-disabled="true" className={clsx("cursor-not-allowed opacity-50")}>
-        <span className="font-medium">{fmtPrice(cell.price, cell.currency)}</span> <span className="rounded bg-gray-200 px-1 text-[10px] font-semibold">OOS</span>
+      <span aria-disabled="true" title="Out of stock" className={clsx("cursor-not-allowed text-gray-400")}>
+        <span className="font-medium">{fmtPrice(cell.price, cell.currency)}</span><span className="sr-only"> (out of stock)</span>
       </span>
     );
   } else if (cell.state === "no_price") {
@@ -46,9 +46,9 @@ export function PriceCell({ cell, onMore }: { cell: Cell; onMore: () => void }) 
     );
   }
   return (
-    <div className="flex flex-col items-end leading-tight">
-      <div className="flex items-center gap-1">{main}{arrow}</div>
-      {(old || more) && <div className="flex items-center gap-2">{old}{more}</div>}
+    <div className="flex flex-col items-center leading-tight">
+      <div className="flex items-center justify-center gap-1">{main}{arrow}</div>
+      {(old || more) && <div className="flex items-center justify-center gap-2">{old}{more}</div>}
     </div>
   );
 }

@@ -3,7 +3,7 @@ import clsx from "clsx";
 import { ChevronLeft, ChevronRight, Loader2, Maximize2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { imgSrc } from "@/lib/client";
+import {imgSrc } from "@/lib/client";
 
 /** Close a popover on outside click or Escape. */
 export function useDismiss(open: boolean, onClose: () => void) {
@@ -47,6 +47,9 @@ export function Button({ variant = "default", size = "md", className, loading, c
   );
 }
 
+/** Open modals, innermost last: Escape/Tab only act on the top one (a dialog opened from inside another dialog). */
+const modalStack: object[] = [];
+
 export function Modal({ open, onClose, title, children, footer, wide, onSubmit }: { open: boolean; onClose: () => void; title: React.ReactNode; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean; onSubmit?: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const opener = useRef<Element | null>(null);
@@ -55,12 +58,15 @@ export function Modal({ open, onClose, title, children, footer, wide, onSubmit }
   useEffect(() => {
     if (!open) return;
     opener.current = document.activeElement;
+    const token = {};
+    modalStack.push(token);
     const root = ref.current;
     const focusables = () => Array.from(root?.querySelectorAll<HTMLElement>('input:not([type=hidden]):not(:disabled), select:not(:disabled), textarea:not(:disabled), button:not(:disabled), a[href]') ?? []).filter((el) => el.offsetParent !== null);
     // focus the first form control, else the dialog itself
     const first = root?.querySelector<HTMLElement>("[data-autofocus], input:not([type=radio]):not([type=checkbox]):not(:disabled), select:not(:disabled), textarea:not(:disabled)");
     (first ?? root)?.focus();
     const h = (e: KeyboardEvent) => {
+      if (modalStack[modalStack.length - 1] !== token) return;
       if (e.key === "Escape") return closeRef.current();
       if (e.key !== "Tab") return;
       const f = focusables();
@@ -70,7 +76,7 @@ export function Modal({ open, onClose, title, children, footer, wide, onSubmit }
       else if (!e.shiftKey && a === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
     };
     window.addEventListener("keydown", h);
-    return () => { window.removeEventListener("keydown", h); (opener.current as HTMLElement | null)?.focus?.(); };
+    return () => { window.removeEventListener("keydown", h); modalStack.splice(modalStack.indexOf(token), 1); (opener.current as HTMLElement | null)?.focus?.(); };
   }, [open]);
   if (!open) return null;
   const body = (

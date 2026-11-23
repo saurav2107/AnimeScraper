@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { DB } from "@/db";
 import { getCategory } from "./categories";
 import { badRequest, conflict, notFound, zodError } from "./errors";
-import { httpUrl, placeholders } from "./util";
+import { audit, httpUrl, placeholders } from "./util";
 
 export type CellState = "none" | "removed" | "oos" | "no_price" | "price";
 export interface Cell {
@@ -25,7 +25,11 @@ const querySchema = z.object({
   maxPrice: z.coerce.number().int().min(0).optional(),
   new: z.string().optional(),
   priceChanged: z.string().optional(),
+  /** "1" lists the products the operator hid instead of the visible ones. */
+  hidden: z.string().optional(),
   ids: z.string().optional(),
+  /** Comma-separated supplier ids: only products listed by at least one of them. */
+  suppliers: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().optional(),
 });
@@ -93,7 +97,7 @@ export function listProducts(db: DB, rawQuery: Record<string, string | undefined
     FROM listings l JOIN suppliers s ON s.id = l.supplier_id AND s.status != 'Deleted'
     GROUP BY l.group_id)`;
 
-  const where: string[] = ["g.category_id = ?", "g.status = 'Active'"];
+  const where: string[] = ["g.category_id = ?", q.hidden === "1" ? "g.status = 'Hidden'" : "g.status = 'Active'"];
   params.push(q.category);
   if (q.q?.trim()) {
     const like = `%${esc(q.q.trim().toLowerCase())}%`;
@@ -105,13 +109,21 @@ export function listProducts(db: DB, rawQuery: Record<string, string | undefined
   if (q.maxPrice != null) (where.push("agg.lowest <= ?"), params.push(q.maxPrice));
   if (q.new === "1") where.push("agg.has_new = 1");
   if (q.priceChanged === "1") where.push("agg.has_pc = 1");
+  if (q.suppliers) {
+    const sids = q.suppliers.split(",").filter(Boolean).slice(0, 100);
+    if (sids.length) {
+      where.push(`EXISTS (SELECT 1 FROM listings ls WHERE ls.group_id = g.id AND ls.status != 'REMOVED' AND ls.supplier_id IN (${placeholders(sids.length)}))`);
+      params.push(...sids);
+    }
+  }
   if (q.ids) {
     const ids = q.ids.split(",").filter(Boolean).slice(0, 500);
     where.push(`g.id IN (${placeholders(ids.length || 1)})`);
     params.push(...(ids.length ? ids : [""]));
   }
 
-  const sizeSub = `(SELECT l3.size_value FROM listings l3 JOIN suppliers s3 ON s3.id = l3.supplier_id AND s3.status != 'Deleted' WHERE l3.group_id = g.id AND l3.size_value IS NOT NULL ORDER BY l3.created, l3.id LIMIT 1)`;
+  // a size the operator typed in on the product wins over whatever the listings say
+  const sizeSub = `COALESCE(g.size_value, (SELECT l3.size_value FROM listings l3 JOIN suppliers s3 ON s3.id = l3.supplier_id AND s3.status != 'Deleted' WHERE l3.group_id = g.id AND l3.size_value IS NOT NULL ORDER BY l3.created, l3.id LIMIT 1))`;
   const dir = sortKey.endsWith("desc") || m?.[2] === "desc" ? "DESC" : "ASC";
   let order: string;
   if (supSort) order = `(sup_price IS NULL), sup_price ${dir}, g.id`;
@@ -119,7 +131,7 @@ export function listProducts(db: DB, rawQuery: Record<string, string | undefined
   else if (sortKey.startsWith("size")) order = `(skey IS NULL), skey ${dir}, g.id`;
   else order = `lower(g.name) ${dir}, g.id`;
 
-  const base = `${withSql} SELECT g.id, g.name, g.image AS gimage, ${sizeSub} AS size_value, agg.lowest, agg.has_new, agg.has_pc,
+  const base = `${withSql} SELECT g.id, g.name, g.image AS gimage, g.size_value IS NOT NULL AS size_manual, ${sizeSub} AS size_value, agg.lowest, agg.has_new, agg.has_pc,
       ${SIZE_KEY.replace(/size_value/g, sizeSub)} AS skey,
       EXISTS (SELECT 1 FROM merge_events me WHERE me.result_group_id = g.id AND me.undone_at IS NULL) AS is_merged
     FROM groups g JOIN agg ON agg.gid = g.id WHERE ${where.join(" AND ")}`;
@@ -157,6 +169,7 @@ export function listProducts(db: DB, rawQuery: Record<string, string | undefined
       name: r.name as string,
       image: httpUrl(image),
       size: r.size_value ?? null,
+      sizeManual: !!r.size_manual,
       lowestPrice: r.lowest ?? null,
       isMerged: !!r.is_merged,
       hasNew: !!r.has_new,
@@ -201,7 +214,7 @@ export function computeCell(ls: Array<Record<string, any>>): Cell {
 }
 
 export function getProduct(db: DB, id: string) {
-  const g = db.prepare("SELECT g.id, g.name, g.image, g.status, g.category_id AS categoryId, c.name AS category, c.size_label AS sizeLabel, c.size_unit AS sizeUnit FROM groups g JOIN categories c ON c.id = g.category_id WHERE g.id = ?").get(id) as any;
+  const g = db.prepare("SELECT g.id, g.name, g.image, g.size_value AS manualSize, g.status, g.category_id AS categoryId, c.name AS category, c.size_kind AS sizeKind, c.size_label AS sizeLabel, c.size_unit AS sizeUnit FROM groups g JOIN categories c ON c.id = g.category_id WHERE g.id = ?").get(id) as any;
   if (!g) throw notFound("Product not found.");
   if (g.status !== "Active") throw notFound("Product not found.");
   const ls = db.prepare(
@@ -213,15 +226,17 @@ export function getProduct(db: DB, id: string) {
   const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
   const history = db.prepare(`SELECT listing_id AS listingId, price, currency, stock, recorded_at AS recordedAt FROM price_history WHERE listing_id IN (${placeholders(ls.length)}) AND recorded_at >= ? ORDER BY recorded_at`).all(...ls.map((l) => l.id), cutoff);
   const ev = db.prepare("SELECT id FROM merge_events WHERE result_group_id = ? AND undone_at IS NULL").get(id) as { id: string } | undefined;
-  const size = ls.find((l) => l.sizeValue)?.sizeValue ?? null;
+  const size = g.manualSize ?? ls.find((l) => l.sizeValue)?.sizeValue ?? null;
   return {
     id: g.id,
     name: g.name,
     image: httpUrl(g.image ?? ls.find((l) => l.image)?.image),
     category: { id: g.categoryId, name: g.category },
+    sizeKind: g.sizeKind,
     sizeLabel: g.sizeLabel,
     sizeUnit: g.sizeUnit,
     size,
+    sizeManual: g.manualSize != null,
     isMerged: !!ev,
     mergeEventId: ev?.id,
     listings: ls.map((l) => ({
@@ -275,4 +290,60 @@ export function mergePreview(db: DB, idsParam: string | undefined) {
   }
   const sameSupplierWarnings = [...perSupplier.values()].filter((e) => e.n >= 2).map((e) => ({ supplierName: e.name, count: e.n }));
   return { products, images, sameSupplierWarnings };
+}
+
+/**
+ * Parse a size typed by the operator for a category's size kind. Returns the normalised stored value
+ * ("30.5" cm for height/length, "1:18" for scale), or null to clear. Throws a field-tagged 400 when invalid.
+ */
+export function parseManualSize(kind: string, raw: unknown): string | null {
+  const v = typeof raw === "string" ? raw.trim() : raw == null ? "" : String(raw).trim();
+  if (!v) return null;
+  const bad = (m: string) => badRequest(m, { field: "value" });
+  if (kind === "height" || kind === "length") {
+    const m = /^(\d{1,3}(?:[.,]\d{1,2})?)\s*(?:cm)?$/i.exec(v);
+    if (!m) throw bad("Enter a number in cm, for example 30 or 24.5.");
+    const n = Math.round(parseFloat(m[1].replace(",", ".")) * 10) / 10;
+    const [lo, hi] = kind === "height" ? [1, 200] : [5, 250];
+    if (n < lo || n > hi) throw bad(`${kind === "height" ? "Height" : "Length"} must be between ${lo} and ${hi} cm.`);
+    return String(n);
+  }
+  if (kind === "scale") {
+    const m = /^(?:1\s*[:/]\s*)?(\d{1,3})$/.exec(v);
+    if (!m) throw bad("Enter a scale like 1:18, 1/18 or just 18.");
+    const d = parseInt(m[1], 10);
+    if (d < 2 || d > 500) throw bad("Scale must be between 1:2 and 1:500.");
+    return `1:${d}`;
+  }
+  if (v.length > 30) throw bad("Must be 30 characters or fewer.");
+  return v;
+}
+
+/** Set (or clear, with an empty value) the size of a product by hand. Scrapes never overwrite it. */
+export function setProductSize(db: DB, body: { productId?: unknown; value?: unknown }) {
+  if (typeof body?.productId !== "string") throw badRequest("Missing product.");
+  const g = db.prepare("SELECT g.id, g.name, g.status, g.size_value AS prev, c.size_kind AS kind FROM groups g JOIN categories c ON c.id = g.category_id WHERE g.id = ?").get(body.productId) as
+    | { id: string; name: string; status: string; prev: string | null; kind: string }
+    | undefined;
+  if (!g || g.status !== "Active") throw notFound("Product not found.");
+  const value = parseManualSize(g.kind, body.value);
+  db.prepare("UPDATE groups SET size_value = ? WHERE id = ?").run(value, g.id);
+  audit(db, value === null ? "Clear product size" : "Set product size", { productId: g.id, name: g.name, before: g.prev, after: value });
+  return { ok: true, size: value };
+}
+
+/** Hide or restore products. A hidden product keeps its listings, so later scrapes update it in place and never bring it back. */
+export function setProductsHidden(db: DB, body: { productIds?: unknown; hidden?: unknown }) {
+  const ids = Array.isArray(body?.productIds) ? body.productIds.filter((x): x is string => typeof x === "string") : [];
+  if (!ids.length) throw badRequest("Select at least one product.");
+  if (ids.length > 500) throw badRequest("Too many products selected at once (max 500).");
+  const hide = body.hidden !== false;
+  const from = hide ? "Active" : "Hidden";
+  const rows = db.prepare(`SELECT id, name FROM groups WHERE status = ? AND id IN (${placeholders(ids.length)})`).all(from, ...ids) as Array<{ id: string; name: string }>;
+  if (!rows.length) throw conflict("Those products have changed. Refresh and try again.");
+  db.transaction(() => {
+    db.prepare(`UPDATE groups SET status = ? WHERE status = ? AND id IN (${placeholders(rows.length)})`).run(hide ? "Hidden" : "Active", from, ...rows.map((r) => r.id));
+    audit(db, hide ? "Hide products" : "Unhide products", { count: rows.length, names: rows.slice(0, 20).map((r) => r.name) });
+  })();
+  return { ok: true, count: rows.length };
 }

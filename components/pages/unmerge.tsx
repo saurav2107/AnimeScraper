@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Alert, Badge, Button, Card, Empty, Modal, PageHeader, Skeleton, Thumb } from "@/components/ui";
-import { fmtDate, get, isDemo, post } from "@/lib/client";
+import {fmtDate, get, post } from "@/lib/client";
 
 export function UnmergePage({ categories, onChanged }: { categories: Array<{ id: string; name: string }>; onChanged: () => void }) {
   const [cat, setCat] = useState<string>("all");
@@ -80,7 +80,7 @@ export function UnmergePage({ categories, onChanged }: { categories: Array<{ id:
                   <td className="td text-right">{m.listingCount}</td>
                   <td className="td max-w-[200px]">{m.note ?? "—"}</td>
                   <td className="td whitespace-nowrap">{m.undoneAt ? `Undone on ${new Date(m.undoneAt).toLocaleDateString("en-IN")}` : <Badge tone="green">Active</Badge>}</td>
-                  <td className="td">{!m.undoneAt && <Button size="sm" variant="outline" disabled={isDemo()} onClick={() => openUndo(m)}>Undo merge</Button>}</td>
+                  <td className="td">{!m.undoneAt && <Button size="sm" variant="outline" onClick={() => openUndo(m)}>Undo merge</Button>}</td>
                 </tr>
               ))}
             </tbody>

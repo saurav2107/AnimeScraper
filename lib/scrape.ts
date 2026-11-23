@@ -40,7 +40,7 @@ interface ListingRow {
 
 /** Persist one registration's crawl. Scraping never touches group_id of existing listings (FR-SCR-03). */
 export function persistProducts(db: DB, supplier: { id: string; name: string; categoryId: string }, products: ScrapedProduct[], entry: RunLogEntry, runAt = now()) {
-  const getByUrl = db.prepare("SELECT l.id, l.supplier_id, l.group_id, l.url, l.price, l.stock, l.status, s.name AS owner FROM listings l JOIN suppliers s ON s.id = l.supplier_id WHERE l.url = ?");
+  const getByUrl = db.prepare("SELECT l.id, l.supplier_id, l.group_id, l.url, l.price, l.stock, l.status, s.name AS owner FROM listings l JOIN suppliers s ON s.id = l.supplier_id WHERE l.url = ? AND s.category_id = ?");
   const insGroup = db.prepare("INSERT INTO groups (id, category_id, name, status, created) VALUES (?,?,?,?,?)");
   const insListing = db.prepare(
     `INSERT INTO listings (id, supplier_id, group_id, url, name, image, height, material, size_value, category, price, currency, stock, status, raw, scraped, created)
@@ -59,7 +59,7 @@ export function persistProducts(db: DB, supplier: { id: string; name: string; ca
       for (const p of batch) {
         if (seen.has(p.url)) continue;
         seen.add(p.url);
-        const ex = getByUrl.get(p.url) as (ListingRow & { owner: string }) | undefined;
+        const ex = getByUrl.get(p.url, supplier.categoryId) as (ListingRow & { owner: string }) | undefined;
         const raw = JSON.stringify(p.raw ?? null);
         const height = /^\d/.test(p.sizeValue ?? "") ? p.sizeValue : null;
         if (!ex) {

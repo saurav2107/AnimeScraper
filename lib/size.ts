@@ -67,7 +67,14 @@ export function extractScale(text: string): string | null {
   return vals.size === 1 ? `1:${[...vals][0]}` : null;
 }
 
-/** Sources are searched in order: name, description, attributes (first hit wins). */
+/** A single bare measurement in a product name ("Goku Figure 30cm") is taken as its height. */
+function bareHeight(name: string): string | null {
+  const vals = distinct(anyMeasurements(name).filter((v) => v >= 1 && v <= 200));
+  return vals.length === 1 ? round1(vals[0]) : null;
+}
+
+/** Sources are searched in order: name, description, attributes (first hit wins).
+ *  Height also falls back to a lone unlabelled measurement in the name (sources[0]). */
 export function extractSize(kind: SizeKind, sources: string[]): string | null {
   if (kind === "other") return null;
   const fn = kind === "height" ? extractHeight : kind === "length" ? extractLength : extractScale;
@@ -76,6 +83,7 @@ export function extractSize(kind: SizeKind, sources: string[]): string | null {
     const v = fn(s);
     if (v) return v;
   }
+  if (kind === "height" && sources[0]) return bareHeight(sources[0]);
   return null;
 }
 

@@ -21,7 +21,7 @@ describe("categories & suppliers", () => {
     await mk("A", "https://site.com/figures");
     await expect(call(db, "POST", "suppliers", { categoryId: cat, name: "A2", url: "https://site.com/other", adapter: "jsonld", termsAcknowledged: true })).rejects.toThrow("already registered in Action Figures");
     await expect(call(db, "POST", "suppliers", { categoryId: cat, name: "A3", url: "https://site.com/figures", adapter: "jsonld", termsAcknowledged: true })).rejects.toThrow("already registered as A");
-    const ok = await call(db, "POST", "suppliers", { categoryId: kat, name: "A-kat", url: "https://site.com/katanas", adapter: "jsonld", termsAcknowledged: true });
+    const ok = await call(db, "POST", "suppliers", { categoryId: kat, name: "A-kat", url: "https://other.com/katanas", adapter: "jsonld", termsAcknowledged: true });
     expect(ok.id).toBeTruthy();
     await expect(call(db, "POST", "suppliers", { name: "x", url: "https://x.com", adapter: "jsonld", termsAcknowledged: true })).rejects.toThrow("category");
   });
@@ -63,15 +63,14 @@ describe("scraping", () => {
     expect((db.prepare("SELECT COUNT(*) c FROM price_history").get() as any).c).toBe(2);
   });
 
-  it("skips URLs owned by another registration and logs them", async () => {
+  it("skips URLs owned by another registration in the same category and logs them", async () => {
     const db = mkDb();
     const { cat, mk } = await setup(db);
-    const kat = (await call(db, "POST", "categories", { name: "Katanas", sizeKind: "length", sizeLabel: "Length", sizeUnit: "cm" })).id;
     const r1 = await mk("R1", "https://site.com/figures", cat);
-    const r2 = await mk("R2", "https://site.com/katanas", kat);
+    const r2 = await mk("R2", "https://other.com/katanas", cat);
     const shared = prod("https://site.com/p/1", "Thing", 100);
     await call(db, "POST", "run", { selected: [r1], wait: true }, {}, fakeCrawl({ "https://site.com/figures": [shared] }));
-    await call(db, "POST", "run", { selected: [r2], wait: true }, {}, fakeCrawl({ "https://site.com/katanas": [{ ...shared, price: 5 }] }));
+    await call(db, "POST", "run", { selected: [r2], wait: true }, {}, fakeCrawl({ "https://other.com/katanas": [{ ...shared, price: 5 }] }));
     const l = db.prepare("SELECT supplier_id, price FROM listings").all() as any[];
     expect(l).toEqual([{ supplier_id: r1, price: 100 }]);
     const job = db.prepare("SELECT log FROM jobs ORDER BY started DESC, rowid DESC LIMIT 1").get() as any;

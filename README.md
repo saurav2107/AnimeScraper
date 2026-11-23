@@ -11,11 +11,9 @@ Next.js 15 (App Router) · React 19 · Tailwind 4 · SQLite via `better-sqlite3`
 ```bash
 npm install
 npm run dev            # http://localhost:3000, DB at data/animecartel.sqlite (override with DB_PATH)
-npm run db:seed-demo   # optional: load sample data into the live DB
 npm test               # backend + API tests
 npm run db:check       # invariant checks INV-1..INV-9 (PRD 8.4)
 ```
-The header's **Demo samples** switch uses a separate read-only in-memory database.
 
 ## Layout
 - `db/schema.ts`, `drizzle/` – tables from PRD §8 (categories, suppliers, groups = products, listings, merge_events, merge_event_sources, merge_event_listings, price_history, history, jobs, settings, audit).

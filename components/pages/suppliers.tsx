@@ -3,7 +3,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import clsx from "clsx";
 import { Alert, Badge, Button, Card, Empty, FieldError, Modal, PageHeader, Switch } from "@/components/ui";
-import { ApiError, del, fmtDate, isDemo, post } from "@/lib/client";
+import {ApiError, del, fmtDate, post } from "@/lib/client";
 
 const blank = (categoryId: string) => ({ name: "", url: "", categoryId, adapter: "woocommerce-api", productUrls: "", sitemapUrls: "", textFilter: "", excludeText: "", termsAcknowledged: false });
 
@@ -61,8 +61,8 @@ export function SuppliersPage({ state, onChanged, onRun, goCategories }: { state
     <>
       <PageHeader title="Suppliers" subtitle="Each registration is one website URL bound to one category." actions={<>
         <label className="flex items-center gap-2 text-sm text-gray-600"><Switch checked={showDeleted} onChange={setShowDeleted} label="Show deleted" />Show deleted</label>
-        <Button variant="outline" onClick={onRun} disabled={isDemo()}>Run scraping now</Button>
-        <Button disabled={isDemo()} onClick={() => openForm()}>Add supplier</Button>
+        <Button variant="outline" onClick={onRun}>Run scraping now</Button>
+        <Button onClick={() => openForm()}>Add supplier</Button>
       </>} />
       {cats.length === 0 && <div className="mb-3"><Alert tone="amber">No categories yet. <button className="underline" onClick={goCategories}>Create a category</button> before adding suppliers.</Alert></div>}
       {rows.length === 0 ? <Empty title={showDeleted ? "No deleted suppliers" : "No suppliers registered yet"} /> : (
@@ -79,11 +79,11 @@ export function SuppliersPage({ state, onChanged, onRun, goCategories }: { state
                   {!showDeleted && <td className="td">{fmtDate(s.lastSuccess)}</td>}
                   <td className="td sticky right-0 bg-white">
                     <div className="flex justify-end gap-2">
-                      {showDeleted ? <Button size="sm" variant="outline" disabled={isDemo()} onClick={() => { setConfirmErr(""); setConfirm({ kind: "restore", s }); }}>Restore</Button> : (<>
-                        {s.status !== "Active" && <Button size="sm" loading={busy === s.id} disabled={isDemo()} onClick={() => test(s)}>Test &amp; activate</Button>}
-                        {s.status === "Active" && <Button size="sm" variant="outline" disabled={isDemo()} onClick={() => pause(s)}>Pause</Button>}
-                        <Button size="sm" variant="outline" disabled={isDemo()} onClick={() => openForm(s)}>Edit</Button>
-                        <Button size="sm" variant="outline" disabled={isDemo()} onClick={() => { setConfirmErr(""); setConfirm({ kind: "delete", s }); }}>Delete</Button>
+                      {showDeleted ? <Button size="sm" variant="outline" onClick={() => { setConfirmErr(""); setConfirm({ kind: "restore", s }); }}>Restore</Button> : (<>
+                        {s.status !== "Active" && <Button size="sm" loading={busy === s.id} onClick={() => test(s)}>Test &amp; activate</Button>}
+                        {s.status === "Active" && <Button size="sm" variant="outline" onClick={() => pause(s)}>Pause</Button>}
+                        <Button size="sm" variant="outline" onClick={() => openForm(s)}>Edit</Button>
+                        <Button size="sm" variant="outline" onClick={() => { setConfirmErr(""); setConfirm({ kind: "delete", s }); }}>Delete</Button>
                       </>)}
                     </div>
                   </td>

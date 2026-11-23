@@ -12,7 +12,7 @@ import { SettingsPage } from "./pages/settings";
 import { SuppliersPage } from "./pages/suppliers";
 import { UnmergePage } from "./pages/unmerge";
 import { Alert, Button, Modal, PageHeader, Skeleton } from "./ui";
-import { get, post, setDemo } from "@/lib/client";
+import {get, post } from "@/lib/client";
 
 type Tab = "dashboard" | "products" | "new" | "price" | "unmerge" | "suppliers" | "categories" | "history" | "export" | "settings";
 
@@ -27,8 +27,7 @@ const ls = {
 };
 
 export function App() {
-  const [tab, setTab] = useState<Tab>("products");
-  const [demo, setDemoState] = useState(false);
+  const [tab, setTab] = useState<Tab>("dashboard");
   const [state, setState] = useState<any>(null);
   const [error, setError] = useState("");
   const [categoryId, setCategoryIdRaw] = useState<string | null>(null);
@@ -46,8 +45,7 @@ export function App() {
   }, []);
 
   // restore workspace + last category
-  useEffect(() => { if (ls.get("workspace") === "demo") { setDemo(true); setDemoState(true); } }, []);
-  useEffect(() => { setState(null); void refresh(); }, [demo, refresh]);
+  useEffect(() => { void refresh(); }, [refresh]);
 
   // pick a valid category (last used, else first alphabetically) — FR-GRID-01
   useEffect(() => {
@@ -67,7 +65,6 @@ export function App() {
 
   // Pages read from `state`, so refetch it whenever the user switches page (History/Dashboard were going stale).
   const go = (t: Tab) => { setTab(t); void refresh(); };
-  const toggleDemo = (v: boolean) => { setDemo(v); setDemoState(v); ls.set("workspace", v ? "demo" : "live"); setCategoryIdRaw(null); };
 
   function openRun() {
     setRunSel((state?.suppliers ?? []).filter((s: any) => s.status === "Active").map((s: any) => s.id));
@@ -100,15 +97,9 @@ export function App() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between border-b bg-white px-6 py-2.5">
-          <div role="group" aria-label="Workspace" className="flex rounded-md bg-gray-100 p-0.5 text-sm">
-            {([["Live catalog", false], ["Demo samples", true]] as const).map(([l, v]) => (
-              <button key={l} onClick={() => toggleDemo(v)} aria-pressed={demo === v} className={clsx("rounded px-3 py-1", demo === v ? "bg-white font-medium shadow-sm" : "text-gray-600")}>{l}</button>
-            ))}
-          </div>
-          {demo && <span className="text-xs text-amber-700">Demo mode is read-only. Sample data only.</span>}
-          {running && <span className="text-xs text-blue-700">A scraping run is in progress…</span>}
-        </header>
+        {running && (
+          <header role="status" className="border-b bg-blue-50 px-6 py-2 text-xs text-blue-800">A scraping run is in progress…</header>
+        )}
 
         <main className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3 sm:p-6">
           {error && <div className="mb-3"><Alert>Data service: {error} <button className="ml-2 underline" onClick={refresh}>Retry</button></Alert></div>}
@@ -130,7 +121,7 @@ export function App() {
         </main>
       </div>
 
-      <Modal open={runOpen} onClose={() => setRunOpen(false)} title="Run scraping now" footer={<><Button variant="outline" onClick={() => setRunOpen(false)}>Cancel</Button><Button loading={runBusy} disabled={!runSel.length || demo} onClick={startRun}>Run {runSel.length} supplier{runSel.length === 1 ? "" : "s"}</Button></>}>
+      <Modal open={runOpen} onClose={() => setRunOpen(false)} title="Run scraping now" footer={<><Button variant="outline" onClick={() => setRunOpen(false)}>Cancel</Button><Button loading={runBusy} disabled={!runSel.length} onClick={startRun}>Run {runSel.length} supplier{runSel.length === 1 ? "" : "s"}</Button></>}>
         {(state?.suppliers ?? []).filter((s: any) => s.status === "Active").length === 0 ? (
           <p className="text-sm text-gray-600">No active suppliers. Open Suppliers and use Test &amp; activate first.</p>
         ) : (

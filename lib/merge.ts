@@ -20,7 +20,7 @@ export function mergeProducts(db: DB, input: unknown): { mergeEventId: string; p
   if (ids.length < 2) throw badRequest("Select at least two distinct products to merge.");
 
   return db.transaction(() => {
-    const groups = db.prepare(`SELECT id, status, category_id AS categoryId, image FROM groups WHERE id IN (${placeholders(ids.length)})`).all(...ids) as any[];
+    const groups = db.prepare(`SELECT id, status, category_id AS categoryId, image, size_value AS sizeValue FROM groups WHERE id IN (${placeholders(ids.length)})`).all(...ids) as any[];
     if (groups.length !== ids.length) throw notFound("One or more products were not found.");
     if (new Set(groups.map((g) => g.categoryId)).size > 1) throw conflict("Products from different categories can't be merged.");
     if (groups.some((g) => g.status !== "Active")) throw conflict("One or more selected products have changed. Refresh and try again.");
@@ -39,7 +39,9 @@ export function mergeProducts(db: DB, input: unknown): { mergeEventId: string; p
     const t = now();
     const resultId = uid();
     const eventId = uid();
-    db.prepare("INSERT INTO groups (id, category_id, name, image, status, created) VALUES (?,?,?,?,?,?)").run(resultId, categoryId, v.name, v.image, "Active", t);
+    // a size typed in on any selected product carries over to the merged one (first selected wins)
+    const carriedSize = ids.map((id) => groups.find((g) => g.id === id)?.sizeValue).find((x) => x) ?? null;
+    db.prepare("INSERT INTO groups (id, category_id, name, image, size_value, status, created) VALUES (?,?,?,?,?,?,?)").run(resultId, categoryId, v.name, v.image, carriedSize, "Active", t);
     db.prepare("INSERT INTO merge_events (id, category_id, result_group_id, name, image, note, created) VALUES (?,?,?,?,?,?,?)").run(eventId, categoryId, resultId, v.name, v.image, v.note?.trim() || null, t);
     const insSrc = db.prepare("INSERT INTO merge_event_sources (merge_event_id, source_group_id) VALUES (?,?)");
     ids.forEach((id) => insSrc.run(eventId, id));

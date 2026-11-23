@@ -3,7 +3,7 @@ import { useState } from "react";
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
 import { Button, Card, PageHeader } from "@/components/ui";
-import { get, isDemo } from "@/lib/client";
+import {get } from "@/lib/client";
 
 const SCOPES = [
   ["all", "All products"], ["new", "New products"], ["price_changes", "Price changes"], ["merged", "Merged products"], ["current", "Current results (grid search & filters)"],
@@ -33,7 +33,7 @@ export async function buildWorkbook(query: Record<string, string | undefined>) {
 
 export async function downloadWorkbook(query: Record<string, string | undefined>) {
   const { wb, empty } = await buildWorkbook(query);
-  XLSX.writeFile(wb, `${isDemo() ? "DEMO-" : ""}animecartel-export-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  XLSX.writeFile(wb, `animecartel-export-${new Date().toISOString().slice(0, 10)}.xlsx`);
   if (empty) toast.message("No rows matched; the workbook contains headers only.");
   else toast.success("Export downloaded");
 }

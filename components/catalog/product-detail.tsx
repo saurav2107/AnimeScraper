@@ -2,7 +2,8 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Alert, Badge, Button, Modal, Skeleton, Thumb } from "@/components/ui";
-import { fmtDate, fmtPrice, get, isDemo, post } from "@/lib/client";
+import {fmtDate, fmtPrice, get, post } from "@/lib/client";
+import { SizeDialog } from "./size-dialog";
 
 const statusTone = (s: string) => (s === "NEW" ? "indigo" : s === "PRICE UPDATED" ? "amber" : s === "OUT OF STOCK" ? "gray" : s === "REMOVED" ? "red" : "green");
 
@@ -32,10 +33,13 @@ function History({ rows }: { rows: Array<{ listingId: string; price: number | nu
 export function ProductDetail({ productId, onClose, onChanged }: { productId: string | null; onClose: () => void; onChanged: () => void }) {
   const [data, setData] = useState<any>(null);
   const [err, setErr] = useState("");
+  const [editSize, setEditSize] = useState(false);
+  const reload = () => { if (productId) get(`products/${productId}`).then(setData).catch((e) => setErr(e.message)); };
   useEffect(() => {
     if (!productId) return;
     setData(null);
     setErr("");
+    setEditSize(false);
     get(`products/${productId}`).then(setData).catch((e) => setErr(e.message));
   }, [productId]);
 
@@ -54,7 +58,7 @@ export function ProductDetail({ productId, onClose, onChanged }: { productId: st
   }
 
   return (
-    <Modal open={!!productId} onClose={onClose} wide title={data ? data.name : "Product"} footer={newOnes.length ? <Button disabled={isDemo()} onClick={acknowledge}>Acknowledge new listings</Button> : undefined}>
+    <Modal open={!!productId} onClose={onClose} wide title={data ? data.name : "Product"} footer={newOnes.length ? <Button onClick={acknowledge}>Acknowledge new listings</Button> : undefined}>
       {err && <Alert>{err}</Alert>}
       {!data && !err && <div className="space-y-3"><Skeleton className="h-16" /><Skeleton className="h-32" /></div>}
       {data && (
@@ -63,7 +67,7 @@ export function ProductDetail({ productId, onClose, onChanged }: { productId: st
             <Thumb src={data.image} size={96} alt={data.name} zoom={images.length ? images : true} />
             <div className="space-y-1">
               <div className="flex flex-wrap gap-2"><Badge tone="blue">{data.category.name}</Badge>{data.isMerged && <Badge tone="indigo">Merged</Badge>}</div>
-              <p className="text-sm text-gray-600">{data.sizeLabel}{data.sizeUnit ? ` (${data.sizeUnit})` : ""}: <b>{data.size ?? "—"}</b></p>
+              <p className="flex items-center gap-2 text-sm text-gray-600">{data.sizeLabel}{data.sizeUnit && data.sizeKind !== "scale" ? ` (${data.sizeUnit})` : ""}: <b>{data.size ?? "—"}</b>{data.sizeManual && <Badge tone="indigo">entered manually</Badge>}<button type="button" onClick={() => setEditSize(true)} className="text-xs font-medium text-indigo-600 hover:underline">{data.size ? "Edit" : "Enter manually"}</button></p>
             </div>
           </div>
           <div className="overflow-x-auto rounded-lg border">
@@ -95,6 +99,7 @@ export function ProductDetail({ productId, onClose, onChanged }: { productId: st
           <p className="text-xs text-gray-400">Last scraped {fmtDate(data.listings[0]?.scraped)}</p>
         </div>
       )}
+      <SizeDialog target={editSize && data ? { id: data.id, name: data.name, size: data.size, sizeManual: data.sizeManual } : null} category={data ? { sizeKind: data.sizeKind, sizeLabel: data.sizeLabel, sizeUnit: data.sizeUnit } : null} onClose={() => setEditSize(false)} onSaved={() => { reload(); onChanged(); }} />
     </Modal>
   );
 }

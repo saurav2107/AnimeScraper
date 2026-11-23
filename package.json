@@ -10,8 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:check": "tsx scripts/integrity-check.ts",
-    "db:seed-demo": "tsx scripts/seed-dev.ts"
+    "db:check": "tsx scripts/integrity-check.ts"
   },
   "dependencies": {
     "better-sqlite3": "^13.2.0",

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { demoDb, liveDb } from "@/db";
+import { liveDb } from "@/db";
 import { api } from "@/lib/api";
 import { HttpError } from "@/lib/errors";
 import { getImage, ImageError } from "@/lib/imgproxy";
@@ -29,7 +29,6 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ path: string[] 
     const given = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? req.headers.get("x-scheduler-token");
     if (given !== process.env.SCHEDULER_TOKEN) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const demo = req.headers.get("x-workspace") === "demo";
   let body: unknown = {};
   if (req.method !== "GET") {
     try {
@@ -40,8 +39,7 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ path: string[] 
   }
   const query = Object.fromEntries(req.nextUrl.searchParams.entries());
   try {
-    const db = demo ? await demoDb() : liveDb();
-    const out = await api(db, { method: req.method, path, query, body, demo });
+    const out = await api(liveDb(), { method: req.method, path, query, body });
     return NextResponse.json(out);
   } catch (e) {
     if (e instanceof HttpError) return NextResponse.json({ error: e.message, ...e.extra }, { status: e.status });

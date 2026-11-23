@@ -1,6 +1,6 @@
 "use client";
 import { Badge, Button, Card, PageHeader } from "@/components/ui";
-import { fmtDate } from "@/lib/client";
+import {fmtDate } from "@/lib/client";
 
 /** A summary card. With `to`, the whole card is a button that opens the related page. */
 const Tile = ({ label, value, sub, to, go }: { label: string; value: React.ReactNode; sub?: string; to?: string; go?: (tab: string) => void }) => {

@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { Badge, Card, Empty, PageHeader } from "@/components/ui";
-import { fmtDate } from "@/lib/client";
+import {fmtDate } from "@/lib/client";
 
 const tone = (s: string) => (s === "Completed" ? "green" : s === "Running" ? "blue" : s === "Failed" ? "red" : "amber");
 
