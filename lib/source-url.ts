@@ -1,1 +1,0 @@
-export function safeUrl(raw:string){const u=new URL(raw);if(u.protocol!=='https:'||u.username||u.password||u.port||!u.hostname.includes('.')||/^(localhost|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(u.hostname)||/^[\d.:\[\]]+$/.test(u.hostname)||/\.(local|internal|localhost)$/.test(u.hostname))throw Error('Use a public HTTPS supplier domain');return u}

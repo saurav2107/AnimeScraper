@@ -3,21 +3,13 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "AnimeCartel Supplier Intelligence",
-  description: "Wholesale sourcing, product discovery and supplier intelligence.",
-  icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
-  },
+  description: "Category-based supplier price comparison with manual, reversible merges.",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="antialiased">{children}</body>
+      <body>{children}</body>
     </html>
   );
 }
