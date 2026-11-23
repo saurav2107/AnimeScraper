@@ -29,6 +29,13 @@
       "when": 1795436157680,
       "tag": "0003_listing_url_per_supplier",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1795448556487,
+      "tag": "0004_supplier_last_found",
+      "breakpoints": true
     }
   ]
 }

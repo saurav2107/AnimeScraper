@@ -21,6 +21,7 @@ export const suppliers = sqliteTable("suppliers", {
   status: text("status", { enum: ["Active", "Paused", "Deleted"] }).notNull().default("Paused"),
   config: text("config").notNull().default("{}"),
   lastSuccess: text("last_success"),
+  lastFound: integer("last_found"), // products seen by the latest successful test/run (0 = reachable but empty)
   deletedAt: text("deleted_at"),
   created: text("created").notNull(),
 });

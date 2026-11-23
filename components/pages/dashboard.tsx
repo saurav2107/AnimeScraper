@@ -1,6 +1,6 @@
 "use client";
-import { Badge, Button, Card, PageHeader } from "@/components/ui";
-import {fmtDate } from "@/lib/client";
+import { Badge, Card, PageHeader, Thumb } from "@/components/ui";
+import { fmtDate, fmtPrice } from "@/lib/client";
 
 /** A summary card. With `to`, the whole card is a button that opens the related page. */
 const Tile = ({ label, value, sub, to, go }: { label: string; value: React.ReactNode; sub?: string; to?: string; go?: (tab: string) => void }) => {
@@ -13,12 +13,12 @@ const Tile = ({ label, value, sub, to, go }: { label: string; value: React.React
   );
 };
 
-export function Dashboard({ state, onRun, go }: { state: any; onRun: () => void; go: (tab: string) => void }) {
+export function Dashboard({ state, go }: { state: any; go: (tab: string) => void }) {
   const s = state.summary;
   const last = s.lastRun;
   return (
     <>
-      <PageHeader title="Dashboard" subtitle="Supplier price comparison at a glance" actions={<Button onClick={onRun}>Run scraping now</Button>} />
+      <PageHeader title="Dashboard" subtitle="Supplier price comparison at a glance" />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Tile label="Active suppliers" value={s.activeSuppliers} sub={`${s.byCategory.reduce((a: number, c: any) => a + c.suppliers, 0)} registered`} to="suppliers" go={go} />
         <Tile label="Products" value={s.products.toLocaleString()} sub="all categories" to="products" go={go} />
@@ -28,6 +28,30 @@ export function Dashboard({ state, onRun, go }: { state: any; onRun: () => void;
         <Tile label="Last run" value={last ? <Badge tone={last.status === "Completed" ? "green" : last.status === "Running" ? "blue" : "amber"}>{last.status}</Badge> : "—"} sub={last ? fmtDate(last.started) : "No runs yet"} to="history" go={go} />
         <Tile label="Next scheduled run" value={<span className="text-base">{state.nextRun ? (Date.parse(state.nextRun) < Date.now() ? "Due" : fmtDate(state.nextRun)) : "Off"}</span>} sub={state.nextRun && Date.parse(state.nextRun) < Date.now() ? "Runs on the next scheduler call" : undefined} />
       </div>
+      <div className="mb-2 mt-6 flex items-center justify-between">
+        <h2 className="text-sm font-semibold">Biggest price drops</h2>
+        <button type="button" onClick={() => go("price")} className="text-xs text-indigo-600 hover:underline">View all price changes</button>
+      </div>
+      {(s.topDrops ?? []).length === 0 ? (
+        <Card className="p-4 text-sm text-gray-500">No price drops in the latest scrapes.</Card>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {s.topDrops.map((d: any) => (
+            <a key={d.productId + d.supplier} href={d.url} target="_blank" rel="noreferrer" title={`Open on ${d.supplier}`} className="flex items-center gap-3 rounded-lg border bg-white p-3 transition hover:border-indigo-300 hover:shadow-sm">
+              <Thumb src={d.image} size={64} alt={d.name} />
+              <div className="min-w-0 flex-1">
+                <p className="line-clamp-2 text-sm font-medium leading-snug">{d.name}</p>
+                <p className="mt-0.5 truncate text-xs text-gray-500">{d.supplier} · {d.category}</p>
+                <p className="mt-1 flex items-baseline gap-2">
+                  <span className="font-semibold text-gray-900">{fmtPrice(d.price, d.currency)}</span>
+                  <span className="text-xs text-gray-400 line-through">{fmtPrice(d.previous, d.currency)}</span>
+                  <span className="rounded bg-green-50 px-1.5 py-0.5 text-xs font-semibold text-green-700">▼ {d.pct}%</span>
+                </p>
+              </div>
+            </a>
+          ))}
+        </div>
+      )}
       <h2 className="mb-2 mt-6 text-sm font-semibold">By category</h2>
       <Card className="overflow-x-auto">
         <table className="w-full text-sm">

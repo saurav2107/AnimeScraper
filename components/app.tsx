@@ -1,6 +1,6 @@
 "use client";
 import clsx from "clsx";
-import { Boxes, FileDown, History, LayoutDashboard, Package, Settings, Sparkles, Store, Tags, TrendingDown, Undo2 } from "lucide-react";
+import { Boxes, FileDown, History, LayoutDashboard, Loader2, Package, Play, Settings, Sparkles, Store, Tags, TrendingDown, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import { ProductGrid } from "./catalog/grid";
@@ -12,13 +12,14 @@ import { SettingsPage } from "./pages/settings";
 import { SuppliersPage } from "./pages/suppliers";
 import { UnmergePage } from "./pages/unmerge";
 import { Alert, Button, Modal, PageHeader, Skeleton } from "./ui";
-import {get, post } from "@/lib/client";
+import { fmtDate, get, post } from "@/lib/client";
 
 type Tab = "dashboard" | "products" | "new" | "price" | "unmerge" | "suppliers" | "categories" | "history" | "export" | "settings";
 
-const NAV: Array<[Tab, string, any]> = [
-  ["dashboard", "Dashboard", LayoutDashboard], ["products", "All Products", Package], ["new", "New Arrivals", Sparkles], ["price", "Price Changes", TrendingDown],
-  ["unmerge", "Unmerge", Undo2], ["suppliers", "Suppliers", Store], ["categories", "Categories", Tags], ["history", "Scraping History", History], ["export", "Export Reports", FileDown], ["settings", "Settings", Settings],
+const NAV: Array<{ group: string | null; items: Array<[Tab, string, any]> }> = [
+  { group: null, items: [["dashboard", "Dashboard", LayoutDashboard]] },
+  { group: "Catalog", items: [["products", "All Products", Package], ["new", "New Arrivals", Sparkles], ["price", "Price Changes", TrendingDown], ["unmerge", "Merges", Undo2]] },
+  { group: "Setup", items: [["suppliers", "Suppliers", Store], ["categories", "Categories", Tags], ["history", "Scraping History", History], ["export", "Export Reports", FileDown], ["settings", "Settings", Settings]] },
 ];
 
 const ls = {
@@ -63,6 +64,9 @@ export function App() {
   const running = latest?.status === "Running" && Date.now() - Date.parse(latest.started) < 30 * 60 * 1000;
   useEffect(() => { if (!running) return; const t = setInterval(refresh, 3000); return () => clearInterval(t); }, [running, refresh]);
 
+  const totalCount = (latest?.selected ?? []).length;
+  const doneCount = Math.min(totalCount, (latest?.log ?? []).filter((e: any) => e?.supplierId).length);
+
   // Pages read from `state`, so refetch it whenever the user switches page (History/Dashboard were going stale).
   const go = (t: Tab) => { setTab(t); void refresh(); };
 
@@ -85,33 +89,51 @@ export function App() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <aside className="flex w-14 shrink-0 flex-col border-r bg-white lg:w-56">
-        <div className="flex items-center justify-center gap-2 border-b px-2 py-4 lg:justify-start lg:px-4"><Boxes className="size-5 text-indigo-600" /><div className="hidden leading-tight lg:block"><p className="text-sm font-semibold">AnimeCartel</p><p className="text-xs text-gray-500">Supplier Intelligence</p></div></div>
-        <nav className="flex-1 space-y-0.5 overflow-y-auto p-2" aria-label="Main">
-          {NAV.map(([id, label, Icon]) => (
-            <button key={id} onClick={() => go(id)} aria-current={tab === id ? "page" : undefined} title={label} className={clsx("flex w-full items-center justify-center gap-2.5 rounded-md px-3 py-2 text-left text-sm lg:justify-start", tab === id ? "bg-indigo-50 font-medium text-indigo-700" : "text-gray-700 hover:bg-gray-100")}>
-              <Icon className="size-4 shrink-0" /><span className="hidden lg:inline">{label}</span><span className="sr-only lg:hidden">{label}</span>
-            </button>
+      <aside className="flex w-14 shrink-0 flex-col border-r bg-white md:w-56">
+        <div className="flex h-16 shrink-0 items-center justify-center gap-2 border-b px-2 md:justify-start md:px-4"><Boxes className="size-5 text-indigo-600" /><div className="hidden leading-tight md:block"><p className="text-sm font-semibold">AnimeCartel</p><p className="text-xs text-gray-500">Supplier Intelligence</p></div></div>
+        <nav className="flex-1 overflow-y-auto p-2" aria-label="Main">
+          {NAV.map((sec, i) => (
+            <div key={sec.group ?? "top"} className={clsx(i > 0 && "mt-3 border-t pt-3 md:mt-1 md:border-t-0 md:pt-0")}>
+              {sec.group && <p className="hidden px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-gray-400 md:block">{sec.group}</p>}
+              <div className="space-y-0.5">
+                {sec.items.map(([id, label, Icon]) => (
+                  <button key={id} onClick={() => go(id)} aria-current={tab === id ? "page" : undefined} title={label} className={clsx("flex w-full items-center justify-center gap-2.5 rounded-md px-3 py-2 text-left text-sm md:justify-start", tab === id ? "bg-indigo-50 font-medium text-indigo-700" : "text-gray-700 hover:bg-gray-100")}>
+                    <Icon className="size-4 shrink-0" /><span className="hidden md:inline">{label}</span><span className="sr-only md:hidden">{label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
         </nav>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {running && (
-          <header role="status" className="border-b bg-blue-50 px-6 py-2 text-xs text-blue-800">A scraping run is in progress…</header>
-        )}
+        <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b bg-white px-4 sm:px-6">
+          {running ? (
+            <div role="status" className="flex min-w-0 items-center gap-3 text-sm text-blue-800">
+              <Loader2 className="size-4 shrink-0 animate-spin" />
+              <span className="truncate">Scraping {doneCount} of {totalCount} supplier{totalCount === 1 ? "" : "s"}…</span>
+              <span className="hidden h-1.5 w-32 overflow-hidden rounded-full bg-blue-100 sm:block" aria-hidden="true"><span className="block h-full rounded-full bg-blue-600 transition-all" style={{ width: `${totalCount ? Math.max(6, Math.round((doneCount / totalCount) * 100)) : 6}%` }} /></span>
+            </div>
+          ) : (
+            <p className="truncate text-xs text-gray-500">{latest ? <>Last run: <span className="font-medium text-gray-700">{latest.status}</span> · {fmtDate(latest.finished ?? latest.started)}</> : "No scraping runs yet"}</p>
+          )}
+          <Button size="sm" onClick={openRun} disabled={running} title={running ? "A scraping run is already in progress" : "Choose suppliers and start scraping"}>
+            <Play className="size-3.5" />{running ? "Running…" : "Run scrape"}
+          </Button>
+        </header>
 
         <main className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3 sm:p-6">
           {error && <div className="mb-3"><Alert>Data service: {error} <button className="ml-2 underline" onClick={refresh}>Retry</button></Alert></div>}
           {!state && !error && <div className="space-y-3"><Skeleton className="h-10 w-64" /><Skeleton className="h-64" /></div>}
           {state && (
             <>
-              {tab === "dashboard" && <Dashboard state={state} onRun={openRun} go={(t) => go(t as Tab)} />}
+              {tab === "dashboard" && <Dashboard state={state} go={(t) => go(t as Tab)} />}
               {tab === "products" && <><PageHeader title="All Products" subtitle="One product per row, one price column per supplier." /><div className="min-h-0 flex-1"><ProductGrid {...gridProps} /></div></>}
               {tab === "new" && <><PageHeader title="New Arrivals" subtitle="Products with listings first seen in recent scrapes." /><div className="min-h-0 flex-1"><ProductGrid {...gridProps} preset="new" /></div></>}
               {tab === "price" && <><PageHeader title="Price Changes" subtitle="▲ price increased · ▼ price decreased since the previous scrape." /><div className="min-h-0 flex-1"><ProductGrid {...gridProps} preset="priceChanged" /></div></>}
               {tab === "unmerge" && <UnmergePage categories={catSummary} onChanged={refresh} />}
-              {tab === "suppliers" && <SuppliersPage state={state} onChanged={refresh} onRun={openRun} goCategories={() => go("categories")} />}
+              {tab === "suppliers" && <SuppliersPage state={state} onChanged={refresh} goCategories={() => go("categories")} />}
               {tab === "categories" && <CategoriesPage categories={catSummary} suppliers={state.suppliers} onChanged={refresh} goSuppliers={() => go("suppliers")} />}
               {tab === "history" && <HistoryPage jobs={state.jobs} />}
               {tab === "export" && <ExportPage categories={catSummary} categoryId={categoryId} gridQuery={gridQuery.current} />}

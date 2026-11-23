@@ -1,6 +1,6 @@
 "use client";
 import clsx from "clsx";
-import { ArrowDown, ArrowUp, Columns3, Pencil, Search, SlidersHorizontal, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Pencil, Search, SlidersHorizontal, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Alert, Badge, Button, Empty, Modal, Skeleton, Thumb, useDismiss } from "@/components/ui";
@@ -13,10 +13,15 @@ import { ProductDetail, SupplierListings } from "./product-detail";
 interface Item { id: string; name: string; image: string | null; size: string | null; sizeManual: boolean; lowestPrice: number | null; isMerged: boolean; cells: Record<string, Cell> }
 interface Supplier { id: string; name: string; status: string }
 
-const LS = {
-  get(k: string) { try { return localStorage.getItem(k); } catch { return null; } },
-  set(k: string, v: string) { try { localStorage.setItem(k, v); } catch { /* ignore (EC-27) */ } },
-};
+/** Cheapest in-stock price across suppliers (needs 2+ priced suppliers, same currency). Ties share "Best". */
+function bestOf(cells: Record<string, Cell>, ids: string[]): { ids: Set<string>; saving: number | null } {
+  const priced = ids.map((id) => ({ id, c: cells[id] })).filter((x) => x.c?.state === "price" && x.c.price != null && (!x.c.currency || x.c.currency === "INR"));
+  if (priced.length < 2) return { ids: new Set(), saving: null };
+  const min = Math.min(...priced.map((x) => x.c.price as number));
+  const winners = priced.filter((x) => x.c.price === min).map((x) => x.id);
+  const next = priced.map((x) => x.c.price as number).filter((p) => p > min);
+  return { ids: new Set(winners), saving: winners.length === 1 && next.length ? Math.min(...next) - min : null };
+}
 
 const WIDE = { check: 40, image: 112, name: 260, size: 96, supplier: 140 };
 const NARROW = { check: 32, image: 84, name: 150, size: 72, supplier: 120 };
@@ -56,8 +61,6 @@ export function ProductGrid({
   const [showHidden, setShowHidden] = useState(false);
   const [fSup, setFSup] = useState<Set<string>>(new Set());
   const [showFilters, setShowFilters] = useState(false);
-  const [showCols, setShowCols] = useState(false);
-  const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [items, setItems] = useState<Item[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [catInfo, setCatInfo] = useState<any>(null);
@@ -78,7 +81,6 @@ export function ProductGrid({
   const LEFT = narrow ? { check: 0, image: 0, name: W.check, size: 0 } : { check: 0, image: W.check, name: W.check + W.image, size: W.check + W.image + W.name };
   const pin = (k: "check" | "image" | "name" | "size") => (narrow && (k === "image" || k === "size") ? {} : { position: "sticky" as const, left: LEFT[k] });
   const filtersRef = useDismiss(showFilters, () => setShowFilters(false));
-  const colsRef = useDismiss(showCols, () => setShowCols(false));
   const reqId = useRef(0);
   const inflight = useRef(false);
   const sentinel = useRef<HTMLDivElement>(null);
@@ -92,10 +94,9 @@ export function ProductGrid({
 
   useEffect(() => { const t = setTimeout(() => setQDebounced(q.trim()), 300); return () => clearTimeout(t); }, [q]);
 
-  // Per-category column visibility (FR-GRID-08)
+  // Reset per-category view state on category switch
   useEffect(() => {
     if (!categoryId) return;
-    try { setHidden(new Set(JSON.parse(LS.get(`cols:${categoryId}`) ?? "[]"))); } catch { setHidden(new Set()); }
     setFSup(new Set()); setShowHidden(false);
     setSelected(new Map()); // selection is cleared on category switch (FR-GRID-01)
   }, [categoryId]);
@@ -146,17 +147,11 @@ export function ProductGrid({
   }, [cursor, loading, load]);
 
   const supFilterOn = suppliers.some((s) => fSup.has(s.id));
-  const visibleSuppliers = suppliers.filter((s) => !hidden.has(s.id) && (!supFilterOn || fSup.has(s.id)));
+  const visibleSuppliers = suppliers.filter((s) => !supFilterOn || fSup.has(s.id));
   const toggleSup = (id: string) => setFSup((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const fallbackSort = sort.startsWith("supplier:") && !suppliers.some((s) => sort.split(":")[1] === s.id);
   useEffect(() => { if (fallbackSort && suppliers.length) setSort("name_asc"); }, [fallbackSort, suppliers.length]);
 
-  const toggleHidden = (id: string) => {
-    const n = new Set(hidden);
-    n.has(id) ? n.delete(id) : n.add(id);
-    setHidden(n);
-    if (categoryId) LS.set(`cols:${categoryId}`, JSON.stringify([...n]));
-  };
   const cycleSort = (asc: string, desc: string) => setSort(sort === asc ? desc : asc);
   const arrow = (asc: string, desc: string) => (sort === asc ? <ArrowUp className="size-3" /> : sort === desc ? <ArrowDown className="size-3" /> : null);
   const activeFilters = (inStock ? 1 : 0) + (minP || maxP ? 1 : 0) + (!preset && fNew ? 1 : 0) + (!preset && fPc ? 1 : 0) + (supFilterOn ? 1 : 0) + (showHidden ? 1 : 0);
@@ -204,7 +199,7 @@ export function ProductGrid({
           {suppliers.map((s) => <option key={s.id + "d"} value={`supplier:${s.id}:desc`}>{s.name} price ↓</option>)}
         </select>
         <div className="relative" ref={filtersRef}>
-          <Button variant="outline" onClick={() => { setShowFilters((v) => !v); setShowCols(false); }}><SlidersHorizontal className="size-4" />Filters{activeFilters > 0 && <Badge tone="indigo">{activeFilters}</Badge>}</Button>
+          <Button variant="outline" onClick={() => { setShowFilters((v) => !v); }}><SlidersHorizontal className="size-4" />Filters{activeFilters > 0 && <Badge tone="indigo">{activeFilters}</Badge>}</Button>
           {showFilters && (
             <div className="absolute left-0 top-10 z-40 w-72 space-y-3 rounded-lg border bg-white p-4 shadow-lg">
               <label className="flex items-center justify-between text-sm">In stock<input type="checkbox" checked={inStock} onChange={(e) => setInStock(e.target.checked)} /></label>
@@ -237,20 +232,32 @@ export function ProductGrid({
             </div>
           )}
         </div>
-        <div className="relative" ref={colsRef}>
-          <Button variant="outline" onClick={() => { setShowCols((v) => !v); setShowFilters(false); }}><Columns3 className="size-4" />Columns</Button>
-          {showCols && (
-            <div className="absolute left-0 top-10 z-40 w-60 space-y-2 rounded-lg border bg-white p-4 shadow-lg">
-              {suppliers.length === 0 && <p className="text-sm text-gray-500">No suppliers.</p>}
-              {suppliers.map((s) => (
-                <label key={s.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!hidden.has(s.id)} onChange={() => toggleHidden(s.id)} />{s.name}</label>
-              ))}
-            </div>
-          )}
-        </div>
       </div>
 
       {error && <Alert>Couldn&apos;t load products. {error} <button className="ml-2 underline" onClick={() => load(false, null)}>Retry</button></Alert>}
+
+      {(() => {
+        const chips: Array<{ key: string; label: string; clear: () => void }> = [];
+        if (qDebounced) chips.push({ key: "q", label: `Search: “${qDebounced}”`, clear: () => setQ("") });
+        if (supFilterOn) for (const sp of suppliers.filter((x) => fSup.has(x.id))) chips.push({ key: "s" + sp.id, label: sp.name, clear: () => toggleSup(sp.id) });
+        if (inStock) chips.push({ key: "stock", label: "In stock", clear: () => setInStock(false) });
+        if (!preset && fNew) chips.push({ key: "new", label: "New", clear: () => setFNew(false) });
+        if (!preset && fPc) chips.push({ key: "pc", label: "Price changed", clear: () => setFPc(false) });
+        if (!priceInvalid && (minP || maxP)) chips.push({ key: "price", label: `Price ${minP ? "₹" + minP : "any"} – ${maxP ? "₹" + maxP : "any"}`, clear: () => { setMinP(""); setMaxP(""); } });
+        if (showHidden) chips.push({ key: "hid", label: "Hidden items only", clear: () => { setShowHidden(false); setSelected(new Map()); } });
+        if (!chips.length) return null;
+        return (
+          <div className="flex flex-wrap items-center gap-2" aria-label="Active filters">
+            {chips.map((c) => (
+              <span key={c.key} className="inline-flex items-center gap-1 rounded-full bg-indigo-50 py-1 pl-3 pr-1.5 text-xs font-medium text-indigo-800">
+                {c.label}
+                <button type="button" onClick={c.clear} aria-label={`Remove filter: ${c.label}`} className="rounded-full p-0.5 hover:bg-indigo-100"><X className="size-3" /></button>
+              </span>
+            ))}
+            <button type="button" onClick={() => { setQ(""); resetFilters(); }} className="text-xs text-gray-500 hover:text-gray-800 hover:underline">Clear all</button>
+          </div>
+        );
+      })()}
 
       <div ref={scroller} className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-white">
         <table className="border-separate border-spacing-0 text-sm" style={{ minWidth: W.check + W.image + W.name + W.size + visibleSuppliers.length * W.supplier }}>
@@ -282,8 +289,12 @@ export function ProductGrid({
             {!loading && items.map((it) => {
               const sel = selected.has(it.id);
               const bg = sel ? "bg-indigo-50" : "bg-white";
+              const best = bestOf(it.cells, visibleSuppliers.map((v) => v.id));
+              // Out of stock everywhere: no supplier currently sells it. Fade the content (not the row) so sticky columns stay opaque.
+              const cs = visibleSuppliers.map((v) => it.cells[v.id]?.state);
+              const soldOut = cs.includes("oos") && !cs.some((c) => c === "price" || c === "no_price");
               return (
-                <tr key={it.id} className="group h-16">
+                <tr key={it.id} className={clsx("group h-16", soldOut && "[&>td>*]:opacity-50")} title={soldOut ? "Out of stock at every supplier" : undefined}>
                   <td className={clsx("border-b px-2", bg)} style={{ ...pin("check"), zIndex: 10 }}>
                     <input type="checkbox" aria-label={`Select ${it.name}`} checked={sel} onChange={() => toggleSel(it)} />
                   </td>
@@ -299,8 +310,8 @@ export function ProductGrid({
                     </button>
                   </td>
                   {visibleSuppliers.map((s) => (
-                    <td key={s.id} className={clsx("border-b px-3 text-center", bg)}>
-                      <PriceCell cell={it.cells[s.id] ?? { state: "none" }} onMore={() => setMore({ productId: it.id, supplierId: s.id, supplierName: s.name })} />
+                    <td key={s.id} className={clsx("border-b px-3 text-center", best.ids.has(s.id) ? "bg-green-50" : bg)}>
+                      <PriceCell best={best.ids.has(s.id)} saving={best.saving} cell={it.cells[s.id] ?? { state: "none" }} onMore={() => setMore({ productId: it.id, supplierId: s.id, supplierName: s.name })} />
                     </td>
                   ))}
                 </tr>

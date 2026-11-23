@@ -209,7 +209,7 @@ export async function executeJob(db: DB, jobId: string, deps: RunDeps = {}) {
           const purged = purgeExcluded(db, sid, excludeTerms(s.config), res.excludedUrls);
           if (purged) entry.errors.push(`Note: removed ${purged} earlier listing(s) that match the skip list.`);
           await verifyRemovals(db, sid, seen, crawler, entry);
-          db.prepare("UPDATE suppliers SET last_success = ? WHERE id = ?").run(now(), sid);
+          db.prepare("UPDATE suppliers SET last_success = ?, last_found = ? WHERE id = ?").run(now(), res.products.length, sid);
         } else {
           entry.status = res.products.length ? "Partial" : "Failed"; // nothing imported => a failure, not a partial run
           errored = true;
@@ -255,10 +255,12 @@ export async function testSupplier(db: DB, id: unknown, deps: RunDeps = {}) {
   const crawler = new Crawler(new URL(s.url).origin, { ...deps, maxRequests: 12, retries: deps.retries ?? 0 });
   const crawl = deps.crawl ?? crawlSupplier;
   const res = await crawl(crawler, s.url, s.config, cat.kind);
-  if (!res.products.length) throw badRequest(`Test failed: no products found.${res.errors[0] ? " " + res.errors[0] : ""}`);
-  db.prepare("UPDATE suppliers SET status = 'Active' WHERE id = ?").run(id);
+  // Errors (blocked, HTTP failure, unreadable page) are a failed test. A page we could read that simply has
+  // no products is fine: the supplier is activated and flagged "no products found" so a later run can pick items up.
+  if (!res.products.length && (res.errors.length || !res.complete)) throw badRequest(`Test failed: no products found.${res.errors[0] ? " " + res.errors[0] : ""}`);
+  db.prepare("UPDATE suppliers SET status = 'Active', last_found = ? WHERE id = ?").run(res.products.length, id);
   audit(db, "Activate supplier", { id, found: res.products.length });
-  return { ok: true, found: res.products.length, status: "Active" };
+  return { ok: true, found: res.products.length, status: "Active", empty: res.products.length === 0 };
 }
 
 export function acknowledge(db: DB, body: { id?: unknown; categoryId?: unknown }) {
