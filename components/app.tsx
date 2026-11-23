@@ -84,6 +84,14 @@ export function App() {
     try { await downloadWorkbook({ category: categoryId ?? "all", scope: "selected", ids: ids.join(",") }); } catch (e) { toast.error((e as Error).message); }
   };
 
+  const runGroups = (() => {
+    const out: Array<{ name: string; items: any[] }> = [];
+    for (const s of (state?.suppliers ?? []).filter((x: any) => x.status === "Active")) {
+      const g = out.find((x) => x.name === s.category);
+      g ? g.items.push(s) : out.push({ name: s.category, items: [s] });
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  })();
   const catSummary = (state?.categories ?? []) as any[];
   const gridProps = { categories: catSummary, categoryId, setCategoryId, onChanged: refresh, onExportSelected: exportSelected, onQuery: (p: Record<string, string | undefined>) => { gridQuery.current = p; } };
 
@@ -144,14 +152,38 @@ export function App() {
       </div>
 
       <Modal open={runOpen} onClose={() => setRunOpen(false)} title="Run scraping now" footer={<><Button variant="outline" onClick={() => setRunOpen(false)}>Cancel</Button><Button loading={runBusy} disabled={!runSel.length} onClick={startRun}>Run {runSel.length} supplier{runSel.length === 1 ? "" : "s"}</Button></>}>
-        {(state?.suppliers ?? []).filter((s: any) => s.status === "Active").length === 0 ? (
+        {runGroups.length === 0 ? (
           <p className="text-sm text-gray-600">No active suppliers. Open Suppliers and use Test &amp; activate first.</p>
         ) : (
-          <ul className="space-y-1.5">
-            {(state?.suppliers ?? []).filter((s: any) => s.status === "Active").map((s: any) => (
-              <li key={s.id}><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={runSel.includes(s.id)} onChange={(e) => setRunSel((p) => (e.target.checked ? [...p, s.id] : p.filter((x) => x !== s.id)))} />{s.name} <span className="text-gray-400">· {s.category}</span></label></li>
-            ))}
-          </ul>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-gray-500">Tick suppliers, or run just one category.</span>
+              <span className="flex gap-3">
+                <button type="button" className="text-indigo-600 hover:underline" onClick={() => setRunSel(runGroups.flatMap((g) => g.items.map((x: any) => x.id)))}>Select all</button>
+                <button type="button" className="text-indigo-600 hover:underline" onClick={() => setRunSel([])}>Clear</button>
+              </span>
+            </div>
+            {runGroups.map((g) => {
+              const ids = g.items.map((x: any) => x.id);
+              const n = ids.filter((id: string) => runSel.includes(id)).length;
+              return (
+                <section key={g.name}>
+                  <div className="mb-1.5 flex items-center justify-between gap-2 border-b pb-1.5">
+                    <label className="flex items-center gap-2 text-sm font-semibold">
+                      <input type="checkbox" checked={n === ids.length} ref={(el) => { if (el) el.indeterminate = n > 0 && n < ids.length; }} onChange={(e) => setRunSel((p) => (e.target.checked ? [...new Set([...p, ...ids])] : p.filter((x) => !ids.includes(x))))} aria-label={`Select all ${g.name} suppliers`} />
+                      {g.name} <span className="text-xs font-normal text-gray-500">{n} of {ids.length}</span>
+                    </label>
+                    <button type="button" className="text-xs text-indigo-600 hover:underline" onClick={() => setRunSel(ids)} title={`Select only the ${g.name} suppliers`}>Only this category</button>
+                  </div>
+                  <ul className="space-y-1.5 pl-6">
+                    {g.items.map((s: any) => (
+                      <li key={s.id}><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={runSel.includes(s.id)} onChange={(e) => setRunSel((p) => (e.target.checked ? [...p, s.id] : p.filter((x) => x !== s.id)))} />{s.name}</label></li>
+                    ))}
+                  </ul>
+                </section>
+              );
+            })}
+          </div>
         )}
       </Modal>
       <Toaster position="bottom-right" richColors />

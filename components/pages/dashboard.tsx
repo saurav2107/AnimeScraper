@@ -1,5 +1,5 @@
 "use client";
-import { Badge, Card, PageHeader, Thumb } from "@/components/ui";
+import { Card, PageHeader, Thumb } from "@/components/ui";
 import { fmtDate, fmtPrice } from "@/lib/client";
 
 /** A summary card. With `to`, the whole card is a button that opens the related page. */
@@ -15,7 +15,6 @@ const Tile = ({ label, value, sub, to, go }: { label: string; value: React.React
 
 export function Dashboard({ state, go }: { state: any; go: (tab: string) => void }) {
   const s = state.summary;
-  const last = s.lastRun;
   return (
     <>
       <PageHeader title="Dashboard" subtitle="Supplier price comparison at a glance" />
@@ -25,7 +24,6 @@ export function Dashboard({ state, go }: { state: any; go: (tab: string) => void
         <Tile label="New arrivals" value={s.newArrivals} to="new" go={go} />
         <Tile label="Price changes" value={s.priceChanges} sub="latest scrape" to="price" go={go} />
         <Tile label="Active merges" value={s.activeMerges} to="unmerge" go={go} />
-        <Tile label="Last run" value={last ? <Badge tone={last.status === "Completed" ? "green" : last.status === "Running" ? "blue" : "amber"}>{last.status}</Badge> : "—"} sub={last ? fmtDate(last.started) : "No runs yet"} to="history" go={go} />
         <Tile label="Next scheduled run" value={<span className="text-base">{state.nextRun ? (Date.parse(state.nextRun) < Date.now() ? "Due" : fmtDate(state.nextRun)) : "Off"}</span>} sub={state.nextRun && Date.parse(state.nextRun) < Date.now() ? "Runs on the next scheduler call" : undefined} />
       </div>
       <div className="mb-2 mt-6 flex items-center justify-between">

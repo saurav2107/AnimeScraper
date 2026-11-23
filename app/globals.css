@@ -25,6 +25,10 @@ body {
 
 /* Tailwind v4's reset leaves buttons with the default arrow; show a pointer on everything clickable. */
 @layer base {
+  /* Tailwind v4 draws a bare `border` / `divide-*` in currentColor (near-black). Default them to a light grey. */
+  *, ::before, ::after, ::backdrop, ::file-selector-button {
+    border-color: var(--color-gray-200);
+  }
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]),
   [role="tab"],
