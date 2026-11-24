@@ -1,11 +1,12 @@
 "use client";
 import clsx from "clsx";
-import { ArrowDown, ArrowUp, Pencil, Search, SlidersHorizontal, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Pencil, ScanSearch, Search, SlidersHorizontal, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Alert, Badge, Button, Empty, Modal, Skeleton, Thumb, useDismiss } from "@/components/ui";
 import {get, post } from "@/lib/client";
 import { MergeDialog } from "./merge-dialog";
+import { MergeScanDialog } from "./merge-scan-dialog";
 import { PriceCell, type Cell } from "./price-cell";
 import { SizeDialog, type SizeTarget } from "./size-dialog";
 import { ProductDetail, SupplierListings } from "./product-detail";
@@ -74,6 +75,9 @@ export function ProductGrid({
   const [detail, setDetail] = useState<string | null>(null);
   const [more, setMore] = useState<{ productId: string; supplierId: string; supplierName: string } | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
+  const [scanOpen, setScanOpen] = useState(false);
+  const [scanIds, setScanIds] = useState<string[] | null>(null);
+  const [mergeCount, setMergeCount] = useState(0);
   const [ackOpen, setAckOpen] = useState(false);
   const [sizeFor, setSizeFor] = useState<SizeTarget | null>(null);
   const narrow = useNarrow();
@@ -178,6 +182,7 @@ export function ProductGrid({
             {categories.map((c) => <option key={c.id} value={c.id}>{c.name}{preset ? "" : ` (${c.productCount})`}</option>)}
           </select>
         )}
+        {!preset && <Button variant="outline" size="sm" onClick={() => setScanOpen(true)} title="Look for products that may be the same item. Nothing is merged automatically."><ScanSearch className="size-4" />Scan for merges</Button>}
         {preset === "new" && total > 0 && <Button variant="outline" size="sm" onClick={() => setAckOpen(true)}>Acknowledge all</Button>}
         <span className="text-sm text-gray-500" aria-live="polite">{loading ? "Loading…" : `${total.toLocaleString()} ${total === 1 ? "product" : "products"}`}</span>
       </div>
@@ -359,6 +364,13 @@ export function ProductGrid({
       <ProductDetail productId={detail} onClose={() => setDetail(null)} onChanged={() => { onChanged(); void load(false, null); }} />
       <SizeDialog target={sizeFor} category={catInfo} onClose={() => setSizeFor(null)} onSaved={() => { void load(false, null); }} />
       <SupplierListings target={more} onClose={() => setMore(null)} />
+      <MergeScanDialog open={scanOpen && !scanIds} categoryId={categoryId} categoryName={catInfo?.name} mergedIds={mergeCount} onClose={() => setScanOpen(false)} onReview={(ids) => setScanIds(ids)} />
+      <MergeDialog
+        open={!!scanIds}
+        ids={scanIds ?? []}
+        onClose={() => setScanIds(null)}
+        onMerged={(name, n) => { setScanIds(null); setMergeCount((c) => c + 1); toast.success(`Merged ${n} products into '${name}'`); onChanged(); void load(false, null); }}
+      />
       <MergeDialog
         open={mergeOpen}
         ids={[...selected.keys()]}

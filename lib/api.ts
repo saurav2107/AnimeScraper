@@ -2,6 +2,7 @@ import type { DB } from "@/db";
 import { deleteCategory, listCategories, saveCategory } from "./categories";
 import { exportData } from "./export";
 import { notFound } from "./errors";
+import { scanMerges } from "./merge-scan";
 import { listMerges, mergeProducts, undoImpact, unmerge } from "./merge";
 import { getProduct, listProducts, mergePreview, setProductSize, setProductsHidden } from "./products";
 import { badRequest } from "./errors";
@@ -46,6 +47,7 @@ export async function api(db: DB, req: ApiRequest, deps: RunDeps = {}): Promise<
       case "scheduled": return scheduled(db, deps);
       case "recover": return recoverLock(db);
       case "acknowledge": return acknowledge(db, body ?? {});
+      case "merge-scan": return scanMerges(db, body?.categoryId);
       case "merge": return mergeProducts(db, body);
       case "product-size": return setProductSize(db, body ?? {});
       case "products-hide": return setProductsHidden(db, body ?? {});
