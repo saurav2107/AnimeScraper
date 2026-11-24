@@ -53,3 +53,5 @@ yarn-error.log*
 
 # Runtime image cache
 /data/img-cache/
+/data/models/
+/data/emb-cache/

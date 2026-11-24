@@ -43,11 +43,14 @@ export function dashboard(db: DB) {
 }
 
 export function appState(db: DB) {
-  const jobs = (db.prepare("SELECT id, kind, status, started, finished, selected, log FROM jobs ORDER BY started DESC LIMIT 50").all() as any[]).map((j) => ({
-    ...j,
-    selected: JSON.parse(j.selected),
-    log: JSON.parse(j.log),
-  }));
+  // Which category each supplier belongs to (deleted suppliers included, so old runs keep their label).
+  const catOf = new Map((db.prepare("SELECT s.id, c.name FROM suppliers s JOIN categories c ON c.id = s.category_id").all() as Array<{ id: string; name: string }>).map((r) => [r.id, r.name]));
+  const jobs = (db.prepare("SELECT id, kind, status, started, finished, selected, log FROM jobs ORDER BY started DESC LIMIT 50").all() as any[]).map((j) => {
+    const selected: string[] = JSON.parse(j.selected);
+    const log: any[] = JSON.parse(j.log).map((e: any) => (e.supplierId ? { ...e, category: catOf.get(e.supplierId) ?? null } : e));
+    const categories = [...new Set([...selected.map((id) => catOf.get(id)), ...log.map((e) => e.category)].filter((x): x is string => !!x))].sort((a, b) => a.localeCompare(b));
+    return { ...j, selected, log, categories };
+  });
   return {
     categories: listCategories(db),
     suppliers: listSuppliers(db),

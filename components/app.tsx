@@ -1,6 +1,6 @@
 "use client";
 import clsx from "clsx";
-import { Boxes, FileDown, History, LayoutDashboard, Loader2, Package, Play, Settings, Sparkles, Store, Tags, TrendingDown, Undo2 } from "lucide-react";
+import { FileDown, History, LayoutDashboard, Loader2, Package, Play, Settings, Sparkles, Store, Tags, TrendingDown, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import { ProductGrid } from "./catalog/grid";
@@ -98,7 +98,7 @@ export function App() {
   return (
     <div className="flex h-screen overflow-hidden">
       <aside className="flex w-14 shrink-0 flex-col border-r bg-white md:w-56">
-        <div className="flex h-16 shrink-0 items-center justify-center gap-2 border-b px-2 md:justify-start md:px-4"><Boxes className="size-5 text-indigo-600" /><div className="hidden leading-tight md:block"><p className="text-sm font-semibold">AnimeCartel</p><p className="text-xs text-gray-500">Supplier Intelligence</p></div></div>
+        <div className="flex h-16 shrink-0 items-center justify-center gap-2 border-b px-2 md:justify-start md:px-4"><img src="/logo.png" alt="AnimeCartel" width={32} height={32} className="size-8 shrink-0 object-contain" /><div className="hidden leading-tight md:block"><p className="text-sm font-semibold">AnimeCartel</p><p className="text-xs text-gray-500">Supplier Intelligence</p></div></div>
         <nav className="flex-1 overflow-y-auto p-2" aria-label="Main">
           {NAV.map((sec, i) => (
             <div key={sec.group ?? "top"} className={clsx(i > 0 && "mt-3 border-t pt-3 md:mt-1 md:border-t-0 md:pt-0")}>
