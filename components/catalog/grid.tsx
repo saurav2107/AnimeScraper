@@ -1,6 +1,6 @@
 "use client";
 import clsx from "clsx";
-import { ArrowDown, ArrowUp, Pencil, ScanSearch, Search, SlidersHorizontal, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ImageUp, Pencil, ScanSearch, Search, SlidersHorizontal, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Alert, Badge, Button, Empty, Modal, Skeleton, Thumb, useDismiss } from "@/components/ui";
@@ -76,6 +76,13 @@ export function ProductGrid({
   const [more, setMore] = useState<{ productId: string; supplierId: string; supplierName: string } | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
+  // "Search by photo": view-only. Dismiss/keep live here in the browser and never touch products or scraping.
+  const [photo, setPhoto] = useState<{ preview: string; matches: Array<{ id: string; score: number }>; dismissed: Set<string>; kept: Set<string>; partial: boolean; remaining: number } | null>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const photoInput = useRef<HTMLInputElement>(null);
+  const photoSeq = useRef(0);
+  const photoRetry = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const stopPhoto = () => { photoSeq.current++; clearTimeout(photoRetry.current); setPhoto(null); };
   const [scanIds, setScanIds] = useState<string[] | null>(null);
   const [mergeCount, setMergeCount] = useState(0);
   const [ackOpen, setAckOpen] = useState(false);
@@ -103,21 +110,26 @@ export function ProductGrid({
     if (!categoryId) return;
     setFSup(new Set()); setShowHidden(false);
     setSelected(new Map()); // selection is cleared on category switch (FR-GRID-01)
+    photoSeq.current++; clearTimeout(photoRetry.current); setPhoto(null);
   }, [categoryId]);
 
+  const photoOn = !!photo;
+  const photoIds = photo ? photo.matches.filter((m) => !photo.dismissed.has(m.id)).slice(0, 200).map((m) => m.id).join(",") : "";
   const params = useMemo(() => ({
     category: categoryId ?? undefined, q: qDebounced || undefined, sort,
     inStock: inStock ? "1" : undefined, minPrice: priceInvalid ? undefined : minP || undefined, maxPrice: priceInvalid ? undefined : maxP || undefined,
     new: newOn ? "1" : undefined, priceChanged: pcOn ? "1" : undefined,
     hidden: showHidden ? "1" : undefined,
     suppliers: fSup.size ? [...fSup].sort().join(",") : undefined,
-  }), [categoryId, qDebounced, sort, inStock, minP, maxP, priceInvalid, newOn, pcOn, fSup, showHidden]);
+    ids: photoIds || undefined,
+  }), [categoryId, qDebounced, sort, inStock, minP, maxP, priceInvalid, newOn, pcOn, fSup, showHidden, photoIds]);
 
   useEffect(() => { onQuery?.(params as Record<string, string | undefined>); }, [params, onQuery]);
 
   const load = useCallback(async (append: boolean, cur: string | null) => {
     if (!categoryId || inflight.current && append) return;
     const id = ++reqId.current;
+    if (photoOn && !photoIds) { setItems([]); setTotal(0); setCursor(null); setLoading(false); return; }
     if (append) { inflight.current = true; setMoreLoading(true); setMoreError(""); } else { setLoading(true); setError(""); }
     try {
       const r = await get("products", { ...params, cursor: append ? cur : undefined });
@@ -137,7 +149,7 @@ export function ProductGrid({
     } finally {
       if (append) { inflight.current = false; setMoreLoading(false); } else setLoading(false);
     }
-  }, [categoryId, params, onChanged]);
+  }, [categoryId, params, onChanged, photoOn, photoIds]);
 
   useEffect(() => { void load(false, null); }, [load]);
 
@@ -150,11 +162,47 @@ export function ProductGrid({
     return () => io.disconnect();
   }, [cursor, loading, load]);
 
+  const scoreOf = useMemo(() => new Map((photo?.matches ?? []).map((m) => [m.id, m.score])), [photo?.matches]);
+  const shownItems = photo ? [...items].sort((a, b) => (scoreOf.get(b.id) ?? 0) - (scoreOf.get(a.id) ?? 0)) : items;
   const supFilterOn = suppliers.some((s) => fSup.has(s.id));
   const visibleSuppliers = suppliers.filter((s) => !supFilterOn || fSup.has(s.id));
   const toggleSup = (id: string) => setFSup((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const fallbackSort = sort.startsWith("supplier:") && !suppliers.some((s) => sort.split(":")[1] === s.id);
   useEffect(() => { if (fallbackSort && suppliers.length) setSort("name_asc"); }, [fallbackSort, suppliers.length]);
+
+  /** Runs the search; while the server is still indexing product photos it re-runs quietly until the results are complete. */
+  async function searchPhoto(dataUrl: string, seq: number, first: boolean): Promise<any> {
+    const r = await post("image-search", { categoryId, image: dataUrl });
+    if (seq !== photoSeq.current) return r;
+    setPhoto((p) => ({ preview: dataUrl, matches: r.matches, dismissed: first || !p ? new Set() : p.dismissed, kept: first || !p ? new Set() : p.kept, partial: !!r.partial, remaining: r.remaining ?? 0 }));
+    if (r.partial) photoRetry.current = setTimeout(() => { void searchPhoto(dataUrl, seq, false).catch(() => undefined); }, 8000);
+    return r;
+  }
+  /** Shrinks the picture in the browser first, so a phone photo uploads in a fraction of a second. */
+  async function pickPhoto(file?: File) {
+    if (!file || !categoryId) return;
+    if (!file.type.startsWith("image/")) return void toast.error("Choose an image file (JPG, PNG or WebP).");
+    setPhotoBusy(true);
+    try {
+      const bmp = await createImageBitmap(file);
+      const k = Math.min(1, 800 / Math.max(bmp.width, bmp.height));
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+      const cx = c.getContext("2d")!; cx.fillStyle = "#fff"; cx.fillRect(0, 0, c.width, c.height); cx.drawImage(bmp, 0, 0, c.width, c.height);
+      const dataUrl = c.toDataURL("image/jpeg", 0.85);
+      photoSeq.current++; clearTimeout(photoRetry.current);
+      const r = await searchPhoto(dataUrl, photoSeq.current, true);
+      setSelected(new Map());
+      if (!r.matches.length && !r.partial) toast.message("No similar products found in this category.");
+    } catch (e) { toast.error((e as Error).message || "Couldn't read that image."); }
+    finally { setPhotoBusy(false); if (photoInput.current) photoInput.current.value = ""; }
+  }
+  const markPhoto = (id: string, what: "dismiss" | "keep" | "undo") => setPhoto((p) => {
+    if (!p) return p;
+    const dismissed = new Set(p.dismissed), kept = new Set(p.kept);
+    if (what === "dismiss") { dismissed.add(id); kept.delete(id); } else if (what === "keep") kept.add(id); else kept.delete(id);
+    return { ...p, dismissed, kept };
+  });
 
   const cycleSort = (asc: string, desc: string) => setSort(sort === asc ? desc : asc);
   const arrow = (asc: string, desc: string) => (sort === asc ? <ArrowUp className="size-3" /> : sort === desc ? <ArrowDown className="size-3" /> : null);
@@ -182,9 +230,13 @@ export function ProductGrid({
             {categories.map((c) => <option key={c.id} value={c.id}>{c.name}{preset ? "" : ` (${c.productCount})`}</option>)}
           </select>
         )}
-        {!preset && <Button variant="outline" size="sm" onClick={() => setScanOpen(true)} title="Look for products that may be the same item. Nothing is merged automatically."><ScanSearch className="size-4" />Scan for merges</Button>}
+        {!preset && <div className="ml-auto flex items-center gap-2">
+          <input ref={photoInput} type="file" accept="image/*" className="hidden" aria-label="Photo to search with" onChange={(e) => void pickPhoto(e.target.files?.[0])} />
+          <Button variant="outline" size="sm" loading={photoBusy} onClick={() => photoInput.current?.click()} title="Upload a photo to find similar products in this category"><ImageUp className="size-4" />{photoBusy ? "Searching…" : "Search by photo"}</Button>
+          <Button variant="outline" size="sm" onClick={() => setScanOpen(true)} title="Look for products that may be the same item. Nothing is merged automatically."><ScanSearch className="size-4" />Scan for merges</Button>
+        </div>}
         {preset === "new" && total > 0 && <Button variant="outline" size="sm" onClick={() => setAckOpen(true)}>Acknowledge all</Button>}
-        <span className="text-sm text-gray-500" aria-live="polite">{loading ? "Loading…" : `${total.toLocaleString()} ${total === 1 ? "product" : "products"}`}</span>
+        {preset && <span className="text-sm text-gray-500" aria-live="polite">{loading ? "Loading…" : `${total.toLocaleString()} ${total === 1 ? "product" : "products"}`}</span>}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -241,6 +293,20 @@ export function ProductGrid({
 
       {error && <Alert>Couldn&apos;t load products. {error} <button className="ml-2 underline" onClick={() => load(false, null)}>Retry</button></Alert>}
 
+      {photo && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-indigo-200 bg-indigo-50 p-2" role="status" aria-label="Photo search">
+          <Thumb src={photo.preview} size={64} alt="Your photo" zoom />
+          <div className="min-w-0 flex-1 text-sm">
+            <p className="font-medium text-indigo-900">{total.toLocaleString()} possible match{total === 1 ? "" : "es"} for your photo{photo.kept.size > 0 && ` · ${photo.kept.size} kept`}</p>
+            <p className="text-xs text-indigo-800">Best matches first. Dismissing or keeping only changes this view; it doesn&apos;t hide products or affect scraping.{photo.partial && ` Still learning this category's product photos (${photo.remaining.toLocaleString()} left). Results refresh automatically.`}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {photo.dismissed.size > 0 && <Button size="sm" variant="outline" onClick={() => setPhoto((p) => p && { ...p, dismissed: new Set() })}>Show {photo.dismissed.size} dismissed</Button>}
+            {photo.kept.size > 0 && <Button size="sm" variant="outline" onClick={() => setSelected(new Map(shownItems.filter((i) => photo.kept.has(i.id)).map((i) => [i.id, i.name])))}>Select kept</Button>}
+            <Button size="sm" variant="outline" onClick={stopPhoto}>Clear photo search</Button>
+          </div>
+        </div>
+      )}
       {(() => {
         const chips: Array<{ key: string; label: string; clear: () => void }> = [];
         if (qDebounced) chips.push({ key: "q", label: `Search: “${qDebounced}”`, clear: () => setQ("") });
@@ -291,7 +357,7 @@ export function ProductGrid({
             {loading && Array.from({ length: 8 }).map((_, i) => (
               <tr key={i}><td colSpan={4 + Math.max(visibleSuppliers.length, 1)} className="border-b p-2"><Skeleton className="h-12" /></td></tr>
             ))}
-            {!loading && items.map((it) => {
+            {!loading && shownItems.map((it) => {
               const sel = selected.has(it.id);
               const bg = sel ? "bg-indigo-50" : "bg-white";
               const best = bestOf(it.cells, visibleSuppliers.map((v) => v.id));
@@ -307,6 +373,17 @@ export function ProductGrid({
                   <td className={clsx("border-b px-3", bg)} style={{ ...pin("name"), zIndex: 10, maxWidth: W.name }}>
                     <button onClick={() => setDetail(it.id)} title={it.name} className="line-clamp-2 text-left font-medium hover:text-indigo-700 hover:underline">{it.name}</button>
                     {it.isMerged && <Badge tone="indigo">Merged</Badge>}
+                    {photo && (() => {
+                      const sc = scoreOf.get(it.id) ?? 0, kept = photo.kept.has(it.id);
+                      return (
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                          <Badge tone={sc >= 0.8 ? "green" : sc >= 0.65 ? "amber" : "gray"}>{Math.round(sc * 100)}% similar</Badge>
+                          {kept ? <><Badge tone="green">Kept</Badge><button type="button" className="text-xs text-gray-500 hover:underline" onClick={() => markPhoto(it.id, "undo")}>Undo</button></>
+                            : <><button type="button" className="rounded border border-green-300 px-1.5 py-0.5 text-xs text-green-800 hover:bg-green-50" onClick={() => markPhoto(it.id, "keep")}>Keep</button>
+                              <button type="button" className="rounded border px-1.5 py-0.5 text-xs text-gray-700 hover:bg-gray-50" onClick={() => markPhoto(it.id, "dismiss")}>Not a match</button></>}
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className={clsx("border-b border-r px-1 text-gray-700", bg)} style={{ ...pin("size"), zIndex: 10 }}>
                     <button type="button" onClick={() => setSizeFor({ id: it.id, name: it.name, size: it.size, sizeManual: it.sizeManual })} title={it.sizeManual ? "Entered manually. Click to change" : it.size ? "From the supplier listing. Click to enter your own" : "No size found. Click to enter one"} aria-label={`Edit ${catInfo?.sizeLabel ?? "size"} of ${it.name}`} className="group/size flex w-full items-center justify-center gap-1 rounded px-2 py-1 text-left hover:bg-indigo-50">

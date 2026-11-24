@@ -36,7 +36,7 @@ export const nameNumbers = (name: string): Set<string> =>
 export interface ImgSig { hash: bigint; color: number[] }
 const sigCache = new Map<string, ImgSig | null>();
 
-async function loadSharp(): Promise<any | null> {
+export async function loadSharp(): Promise<any | null> {
   try {
     const m: any = await import("sharp");
     return m.default ?? m;
