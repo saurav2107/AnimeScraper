@@ -55,7 +55,7 @@ export function UnmergePage({ categories, onChanged }: { categories: Array<{ id:
 
   return (
     <>
-      <PageHeader title="Unmerge" subtitle="Every merge is recorded. Undoing a merge restores the original products with their names and images." />
+      <PageHeader title="Merges" subtitle="Every merge is recorded. Undoing a merge restores the original products with their names and images." />
       <div className="mb-3 flex flex-wrap gap-2">
         <select className="input w-56" aria-label="Category" value={cat} onChange={(e) => setCat(e.target.value)}>
           <option value="all">All categories</option>

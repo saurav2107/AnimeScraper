@@ -1,4 +1,5 @@
 "use client";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import clsx from "clsx";
@@ -7,8 +8,14 @@ import {ApiError, del, fmtDate, post } from "@/lib/client";
 
 const blank = (categoryId: string) => ({ name: "", url: "", categoryId, adapter: "woocommerce-api", productUrls: "", sitemapUrls: "", textFilter: "", excludeText: "", termsAcknowledged: false });
 
-export function SuppliersPage({ state, onChanged, onRun, goCategories }: { state: any; onChanged: () => void; onRun: () => void; goCategories: () => void }) {
+const COLLAPSE_KEY = "suppliers:collapsed";
+const readCollapsed = (): Set<string> => { try { return new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY) ?? "[]")); } catch { return new Set(); } };
+
+export function SuppliersPage({ state, onChanged, goCategories }: { state: any; onChanged: () => void; goCategories: () => void }) {
   const [showDeleted, setShowDeleted] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsed);
+  const saveCollapsed = (n: Set<string>) => { setCollapsed(n); try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...n])); } catch { /* ignore */ } };
+  const toggleGroup = (name: string) => { const n = new Set(collapsed); n.has(name) ? n.delete(name) : n.add(name); saveCollapsed(n); };
   const [form, setForm] = useState<any>(null);
   const [err, setErr] = useState<{ message: string; field?: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -19,10 +26,11 @@ export function SuppliersPage({ state, onChanged, onRun, goCategories }: { state
   const cats = state.categories as any[];
   const locked = (s: any) => s.listingCount > 0;
 
-  function openForm(s?: any) {
+  /** `copy` pre-fills a new supplier from an existing one (no id, nothing locked, saved as a separate Paused supplier). */
+  function openForm(s?: any, copy = false) {
     if (!cats.length) return toast.error("Create a category before registering suppliers.");
     setErr(null);
-    setForm(s ? { id: s.id, name: s.name, url: s.url, categoryId: s.categoryId, adapter: s.config.adapter, productUrls: s.config.productUrls.join("\n"), textFilter: s.config.textFilter ?? "", excludeText: s.config.excludeText ?? "", sitemapUrls: s.config.sitemapUrls.join("\n"), termsAcknowledged: s.config.termsAcknowledged, locked: locked(s) } : blank(cats.length === 1 ? cats[0].id : ""));
+    setForm(s && copy ? { name: `${s.name} (copy)`, url: s.url, categoryId: s.categoryId, adapter: s.config.adapter, productUrls: s.config.productUrls.join("\n"), textFilter: s.config.textFilter ?? "", excludeText: s.config.excludeText ?? "", sitemapUrls: s.config.sitemapUrls.join("\n"), termsAcknowledged: false, locked: false, copyOf: s.name } : s ? { id: s.id, name: s.name, url: s.url, categoryId: s.categoryId, adapter: s.config.adapter, productUrls: s.config.productUrls.join("\n"), textFilter: s.config.textFilter ?? "", excludeText: s.config.excludeText ?? "", sitemapUrls: s.config.sitemapUrls.join("\n"), termsAcknowledged: s.config.termsAcknowledged, locked: locked(s) } : blank(cats.length === 1 ? cats[0].id : ""));
   }
   const change = (patch: Record<string, unknown>) => { setForm((f: any) => ({ ...f, ...patch })); setErr(null); };
   const fe = (f: string) => (err?.field === f ? err.message : undefined);
@@ -39,7 +47,7 @@ export function SuppliersPage({ state, onChanged, onRun, goCategories }: { state
   async function test(s: any) {
     setBusy(s.id);
     setTestFail((m) => { const n = { ...m }; delete n[s.id]; return n; });
-    try { const r = await post("test", { id: s.id }); toast.success(`Test passed: ${r.found} products found. Source activated.`); onChanged(); }
+    try { const wasActive = s.status === "Active"; const r = await post("test", { id: s.id }); r.empty ? toast.success("Supplier is active, but no products were found on its page yet. A later scrape will pick them up.", { duration: 8000 }) : toast.success(`Test passed: ${r.found} products found.${wasActive ? "" : " Source activated."}`); onChanged(); }
     catch (e) { setTestFail((m) => ({ ...m, [s.id]: (e as Error).message })); toast.error((e as Error).message, { duration: 8000 }); } finally { setBusy(null); }
   }
   async function pause(s: any) {
@@ -57,32 +65,50 @@ export function SuppliersPage({ state, onChanged, onRun, goCategories }: { state
   }
 
   const rows = showDeleted ? state.deletedSuppliers : state.suppliers;
+  // One section per category, alphabetical (suppliers are already ordered by name within each).
+  const groups: Array<{ name: string; items: any[] }> = [];
+  for (const r of [...rows].sort((a: any, b: any) => a.category.localeCompare(b.category, undefined, { sensitivity: "base" }))) {
+    const g = groups.find((x) => x.name === r.category);
+    g ? g.items.push(r) : groups.push({ name: r.category, items: [r] });
+  }
   return (
     <>
       <PageHeader title="Suppliers" subtitle="Each registration is one website URL bound to one category." actions={<>
         <label className="flex items-center gap-2 text-sm text-gray-600"><Switch checked={showDeleted} onChange={setShowDeleted} label="Show deleted" />Show deleted</label>
-        <Button variant="outline" onClick={onRun}>Run scraping now</Button>
         <Button onClick={() => openForm()}>Add supplier</Button>
       </>} />
       {cats.length === 0 && <div className="mb-3"><Alert tone="amber">No categories yet. <button className="underline" onClick={goCategories}>Create a category</button> before adding suppliers.</Alert></div>}
       {rows.length === 0 ? <Empty title={showDeleted ? "No deleted suppliers" : "No suppliers registered yet"} /> : (
-        <Card className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-sm">
-            <thead><tr><th className="th">Supplier</th><th className="th">Category</th><th className="th">URL</th><th className="th">Status</th>{!showDeleted && <th className="th">Last success</th>}<th className="th sticky right-0" /></tr></thead>
+        <div className="space-y-5">
+        {groups.length > 1 && (
+          <div className="flex justify-end gap-3 text-xs">
+            <button type="button" className="text-indigo-600 hover:underline" onClick={() => saveCollapsed(new Set())}>Expand all</button>
+            <button type="button" className="text-indigo-600 hover:underline" onClick={() => saveCollapsed(new Set(groups.map((g) => g.name)))}>Collapse all</button>
+          </div>
+        )}
+        {groups.map((g) => (
+        <Card key={g.name} className="overflow-x-auto">
+          <button type="button" onClick={() => toggleGroup(g.name)} aria-expanded={!collapsed.has(g.name)} title={collapsed.has(g.name) ? "Expand" : "Collapse"} className={clsx("flex w-full items-center gap-2 bg-gray-50 px-4 py-2 text-left hover:bg-gray-100", !collapsed.has(g.name) && "border-b")}>
+            {collapsed.has(g.name) ? <ChevronRight className="size-4 text-gray-500" /> : <ChevronDown className="size-4 text-gray-500" />}<h2 className="text-sm font-semibold">{g.name}</h2><span className="text-xs text-gray-500">{g.items.length} supplier{g.items.length === 1 ? "" : "s"}{!showDeleted && ` · ${g.items.filter((x: any) => x.status === "Active").length} active`}</span></button>
+          {!collapsed.has(g.name) && <table className="w-full min-w-[860px] table-fixed text-sm">
+            <colgroup><col className="w-[17%]" /><col className="w-[25%]" />{!showDeleted && <><col className="w-[9%]" /><col className="w-[10%]" /><col className="w-[14%]" /></>}{showDeleted && <col className="w-[20%]" />}<col /></colgroup>
+            <thead><tr><th className="th">Supplier</th><th className="th">URL</th><th className="th">Status</th>{!showDeleted && <th className="th">Products found</th>}{!showDeleted && <th className="th">Last success</th>}<th className="th sticky right-0" /></tr></thead>
             <tbody className="divide-y">
-              {rows.map((s: any) => (
+              {g.items.map((s: any) => (
                 <tr key={s.id}>
-                  <td className="td font-medium">{s.name}</td>
-                  <td className="td">{s.category}</td>
+                  <td className="td font-medium">{showDeleted ? s.name : <button type="button" onClick={() => openForm(s)} title="Edit this supplier" className="text-left text-indigo-700 hover:underline">{s.name}</button>}</td>
                   <td className="td max-w-[260px] truncate"><a href={s.url} target="_blank" rel="noreferrer" className="text-indigo-700 hover:underline">{s.url}</a></td>
                   <td className="td">{showDeleted ? <Badge tone="red">Deleted</Badge> : <Badge tone={s.status === "Active" ? "green" : "gray"}>{s.status}</Badge>}{testFail[s.id] && <p role="alert" className="mt-1 max-w-[220px] text-xs text-red-600">Test failed: {testFail[s.id].replace(/^Test failed:\s*/, "")}</p>}</td>
+                  {!showDeleted && <td className="td">{(s.lastFound ?? (s.listingCount > 0 ? s.listingCount : null)) == null ? <span className="text-gray-400" title="Not tested or scraped yet">—</span> : (s.lastFound ?? s.listingCount) > 0 ? <span className="font-medium text-green-700" title={`${(s.lastFound ?? s.listingCount).toLocaleString()} products at the last test or scrape`}>Yes</span> : <span className="font-medium text-amber-700" title="The page was readable but listed no products">No</span>}</td>}
                   {!showDeleted && <td className="td">{fmtDate(s.lastSuccess)}</td>}
                   <td className="td sticky right-0 bg-white">
                     <div className="flex justify-end gap-2">
                       {showDeleted ? <Button size="sm" variant="outline" onClick={() => { setConfirmErr(""); setConfirm({ kind: "restore", s }); }}>Restore</Button> : (<>
-                        {s.status !== "Active" && <Button size="sm" loading={busy === s.id} onClick={() => test(s)}>Test &amp; activate</Button>}
                         {s.status === "Active" && <Button size="sm" variant="outline" onClick={() => pause(s)}>Pause</Button>}
-                        <Button size="sm" variant="outline" onClick={() => openForm(s)}>Edit</Button>
+                        {s.status === "Active"
+                          ? <Button size="sm" variant="outline" loading={busy === s.id} onClick={() => test(s)} title="Run the test again against the supplier's page">Re-test</Button>
+                          : <Button size="sm" loading={busy === s.id} onClick={() => test(s)}>Test &amp; activate</Button>}
+                        <Button size="sm" variant="outline" onClick={() => openForm(s, true)} title="Create a new supplier from this one's settings">Copy</Button>
                         <Button size="sm" variant="outline" onClick={() => { setConfirmErr(""); setConfirm({ kind: "delete", s }); }}>Delete</Button>
                       </>)}
                     </div>
@@ -90,14 +116,17 @@ export function SuppliersPage({ state, onChanged, onRun, goCategories }: { state
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table>}
         </Card>
+        ))}
+        </div>
       )}
 
-      <Modal open={!!form} onClose={() => setForm(null)} onSubmit={save} title={form?.id ? "Edit supplier" : "Add supplier"} footer={<><Button variant="outline" onClick={() => setForm(null)}>Cancel</Button><Button type="submit" loading={busy === "save"}>Save</Button></>}>
+      <Modal open={!!form} onClose={() => setForm(null)} onSubmit={save} title={form?.id ? "Edit supplier" : form?.copyOf ? "Copy supplier" : "Add supplier"} footer={<><Button variant="outline" onClick={() => setForm(null)}>Cancel</Button><Button type="submit" loading={busy === "save"}>Save</Button></>}>
         {form && (
           <div className="space-y-3">
             {err && !err.field && <Alert>{err.message}</Alert>}
+            {form.copyOf && <p className="rounded-md bg-indigo-50 px-3 py-2 text-xs text-indigo-800">Copied from <b>{form.copyOf}</b>. Change whatever differs. A copy needs its own source URL, and a category that doesn&apos;t already have this website. It&apos;s saved as a separate supplier, starts Paused, and you&apos;ll need to confirm the terms again.</p>}
             <div><label className="label" htmlFor="sn">Supplier name</label><input id="sn" className={clsx("input", bad("name"))} aria-invalid={!!fe("name")} value={form.name} onChange={(e) => change({ name: e.target.value })} /><FieldError>{fe("name")}</FieldError></div>
             <div><label className="label" htmlFor="su">Source URL (HTTPS)</label><input id="su" className={clsx("input", bad("url"))} aria-invalid={!!fe("url")} placeholder="https://example.com/product-category/…" value={form.url} onChange={(e) => change({ url: e.target.value })} /><FieldError>{fe("url")}</FieldError></div>
             <div className="grid grid-cols-2 gap-3">

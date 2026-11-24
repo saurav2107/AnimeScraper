@@ -49,13 +49,14 @@ export interface SupplierRow {
   category: string;
   config: SupplierConfig;
   lastSuccess: string | null;
+  lastFound: number | null;
   deletedAt: string | null;
   listingCount: number;
 }
 
 export function listSuppliers(db: DB, deleted = false): SupplierRow[] {
   const rows = db.prepare(
-    `SELECT s.id, s.name, s.url, s.status, s.category_id AS categoryId, c.name AS category, s.config, s.last_success AS lastSuccess, s.deleted_at AS deletedAt,
+    `SELECT s.id, s.name, s.url, s.status, s.category_id AS categoryId, c.name AS category, s.config, s.last_success AS lastSuccess, s.last_found AS lastFound, s.deleted_at AS deletedAt,
        (SELECT COUNT(*) FROM listings l WHERE l.supplier_id = s.id) AS listingCount
      FROM suppliers s JOIN categories c ON c.id = s.category_id
      WHERE ${deleted ? "s.status = 'Deleted'" : "s.status != 'Deleted'"} ORDER BY lower(c.name), lower(s.name)`,
@@ -112,7 +113,7 @@ export function saveSupplier(db: DB, input: unknown): { id: string; status?: str
   // Only changes that affect what gets scraped require a fresh Test & activate (a rename keeps the status).
   const sourceChanged = cur.url !== url || cur.config.adapter !== config.adapter || JSON.stringify(cur.config.productUrls) !== JSON.stringify(productUrls) || JSON.stringify(cur.config.sitemapUrls) !== JSON.stringify(sitemapUrls) || (cur.config.textFilter ?? "") !== config.textFilter || (cur.config.excludeText ?? "") !== config.excludeText || cur.categoryId !== v.categoryId;
   const status = sourceChanged ? "Paused" : cur.status;
-  db.prepare("UPDATE suppliers SET category_id=?, name=?, url=?, status=?, config=? WHERE id=?").run(v.categoryId, v.name, url, status, JSON.stringify(config), v.id);
+  db.prepare("UPDATE suppliers SET category_id=?, name=?, url=?, status=?, config=?, last_found = CASE WHEN ? THEN NULL ELSE last_found END WHERE id=?").run(v.categoryId, v.name, url, status, JSON.stringify(config), sourceChanged ? 1 : 0, v.id);
   audit(db, "Save supplier", { id: v.id, name: v.name, url, categoryId: v.categoryId, sourceChanged });
   return { id: v.id, status, sourceChanged };
 }

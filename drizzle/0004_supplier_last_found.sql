@@ -1,0 +1,1 @@
+ALTER TABLE `suppliers` ADD `last_found` integer;

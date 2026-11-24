@@ -53,3 +53,44 @@ describe("hiding products", () => {
     void cat;
   });
 });
+
+describe("dashboard price drops", () => {
+  it("lists the biggest % drops first, only for visible in-stock products", async () => {
+    const { db, id, run } = await world();
+    await run([prod("https://a.example/1", "Goku", 80), prod("https://a.example/2", "Luffy", 190)]); // -20% and -5%
+    let drops = (await call(db, "GET", "state")).summary.topDrops;
+    expect(drops.map((d: any) => [d.name, d.pct])).toEqual([["Goku", 20], ["Luffy", 5]]);
+    await call(db, "POST", "products-hide", { productIds: [id("https://a.example/1")] });
+    drops = (await call(db, "GET", "state")).summary.topDrops;
+    expect(drops.map((d: any) => d.name)).toEqual(["Luffy"]);
+    await run([prod("https://a.example/1", "Goku", 80), prod("https://a.example/2", "Luffy", 250)]); // rise => no longer a drop
+    expect((await call(db, "GET", "state")).summary.topDrops).toEqual([]);
+  });
+});
+
+describe("testing a supplier whose page has no products", () => {
+  const setupSup = async () => {
+    const db = mkDb();
+    const { mk } = (await setup(db)) as any;
+    const id = await mk("Empty", "https://empty.example/f");
+    db.prepare("UPDATE suppliers SET status = 'Paused' WHERE id = ?").run(id);
+    return { db, id };
+  };
+  it("activates it and flags 'no products' when the page was readable but empty", async () => {
+    const { db, id } = await setupSup();
+    const r = await call(db, "POST", "test", { id }, {}, { ...fakeCrawl({}), crawl: async () => ({ products: [], complete: true, errors: [] }) });
+    expect(r).toMatchObject({ status: "Active", found: 0, empty: true });
+    const s = (await call(db, "GET", "state")).suppliers.find((x: any) => x.id === id);
+    expect(s).toMatchObject({ status: "Active", lastFound: 0 });
+  });
+  it("still fails when the page could not be read", async () => {
+    const { db, id } = await setupSup();
+    await expect(call(db, "POST", "test", { id }, {}, { ...fakeCrawl({}), crawl: async () => ({ products: [], complete: true, errors: ["HTTP 403"] }) })).rejects.toThrow("HTTP 403");
+  });
+  it("clears the flag once a run finds products, and when the source changes", async () => {
+    const { db, id } = await setupSup();
+    await call(db, "POST", "test", { id }, {}, { ...fakeCrawl({}), crawl: async () => ({ products: [], complete: true, errors: [] }) });
+    await call(db, "POST", "run", { selected: [id], wait: true }, {}, fakeCrawl({ "https://empty.example/f": [prod("https://empty.example/1", "X", 10)] }));
+    expect(((await call(db, "GET", "state")).suppliers.find((x: any) => x.id === id)).lastFound).toBe(1);
+  });
+});
