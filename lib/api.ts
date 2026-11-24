@@ -8,6 +8,7 @@ import { getProduct, listProducts, mergePreview, setProductSize, setProductsHidd
 import { badRequest } from "./errors";
 import { acknowledge, onAutomaticEnabled, recoverLock, runNow, scheduled, scheduleSettings, testSupplier, type RunDeps } from "./scrape";
 import { appState } from "./summary";
+import { importSuppliers } from "./suppliers-import";
 import { deleteSupplier, pauseSupplier, restoreSupplier, saveSupplier } from "./suppliers";
 import { setSetting } from "./util";
 
@@ -40,6 +41,7 @@ export async function api(db: DB, req: ApiRequest, deps: RunDeps = {}): Promise<
     switch (route) {
       case "categories": return saveCategory(db, body);
       case "suppliers": return saveSupplier(db, body);
+      case "suppliers-import": return importSuppliers(db, body);
       case "suppliers/restore": return restoreSupplier(db, body?.id);
       case "test": return testSupplier(db, body?.id, deps);
       case "pause": return pauseSupplier(db, body?.id);
