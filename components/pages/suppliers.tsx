@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import clsx from "clsx";
 import { Alert, Badge, Button, Card, Empty, FieldError, Modal, PageHeader, Switch } from "@/components/ui";
 import {ApiError, del, fmtDate, post } from "@/lib/client";
+import { exportSuppliers, ImportSuppliersDialog } from "./suppliers-io";
 
 const blank = (categoryId: string) => ({ name: "", url: "", categoryId, adapter: "woocommerce-api", productUrls: "", sitemapUrls: "", textFilter: "", excludeText: "", termsAcknowledged: false });
 
@@ -16,6 +17,7 @@ export function SuppliersPage({ state, onChanged, goCategories }: { state: any; 
   const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsed);
   const saveCollapsed = (n: Set<string>) => { setCollapsed(n); try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...n])); } catch { /* ignore */ } };
   const toggleGroup = (name: string) => { const n = new Set(collapsed); n.has(name) ? n.delete(name) : n.add(name); saveCollapsed(n); };
+  const [importOpen, setImportOpen] = useState(false);
   const [form, setForm] = useState<any>(null);
   const [err, setErr] = useState<{ message: string; field?: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -75,6 +77,8 @@ export function SuppliersPage({ state, onChanged, goCategories }: { state: any; 
     <>
       <PageHeader title="Suppliers" subtitle="Each registration is one website URL bound to one category." actions={<>
         <label className="flex items-center gap-2 text-sm text-gray-600"><Switch checked={showDeleted} onChange={setShowDeleted} label="Show deleted" />Show deleted</label>
+        <Button variant="outline" onClick={() => exportSuppliers(state)} disabled={!state.suppliers.length} title="Download all registered suppliers as an Excel file">Export to Excel</Button>
+        <Button variant="outline" onClick={() => setImportOpen(true)} title="Restore suppliers from an exported Excel file">Import from Excel</Button>
         <Button onClick={() => openForm()}>Add supplier</Button>
       </>} />
       {cats.length === 0 && <div className="mb-3"><Alert tone="amber">No categories yet. <button className="underline" onClick={goCategories}>Create a category</button> before adding suppliers.</Alert></div>}
@@ -122,6 +126,7 @@ export function SuppliersPage({ state, onChanged, goCategories }: { state: any; 
         </div>
       )}
 
+      <ImportSuppliersDialog open={importOpen} onClose={() => setImportOpen(false)} onDone={onChanged} />
       <Modal open={!!form} onClose={() => setForm(null)} onSubmit={save} title={form?.id ? "Edit supplier" : form?.copyOf ? "Copy supplier" : "Add supplier"} footer={<><Button variant="outline" onClick={() => setForm(null)}>Cancel</Button><Button type="submit" loading={busy === "save"}>Save</Button></>}>
         {form && (
           <div className="space-y-3">
